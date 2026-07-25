@@ -100,7 +100,7 @@ class AttachmentIn(BaseModel):
 
 class ChatBody(BaseModel):
     message: str = Field(default="", max_length=8000)
-    force_model: str | None = Field(default=None, description="easy|hard")
+    force_model: str | None = Field(default=None, description="已忽略：对话固定 DeepSeek")
     attachments: list[AttachmentIn] = Field(default_factory=list)
 
 
@@ -164,6 +164,8 @@ def health():
     return {
         "ok": True,
         "name": "小葡萄日程提醒智能体",
+        "chat_model": os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash"),
+        "logic_model": os.environ.get("CURSOR_MODEL_ID", "grok-4.5"),
         "default_model": os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash"),
         "hard_model": os.environ.get("CURSOR_MODEL_ID", "grok-4.5"),
         "https_host": https_host,
@@ -308,8 +310,6 @@ async def chat(
     if not message and not attach_names:
         raise HTTPException(400, "请输入消息或上传截图")
 
-    force = body.force_model if body.force_model in ("easy", "hard") else None
-
     stored_user = message or "（发送了截图）"
     if attach_names:
         stored_user += "\n📎 " + "、".join(attach_names) + "（仅本轮使用）"
@@ -328,7 +328,6 @@ async def chat(
         loop.call_soon_threadsafe(queue.put_nowait, json.dumps(obj, ensure_ascii=False))
 
     def _worker() -> None:
-        agent_id = session.get("agent_id")
         chat_text = message
         try:
             _emit({"type": "status", "message": "已收到，正在准备…"})
@@ -354,8 +353,6 @@ async def chat(
                 member,
                 history,
                 chat_text,
-                force_difficulty=force,  # type: ignore[arg-type]
-                session_agent_id=agent_id if force == "hard" else None,
                 on_delta=on_delta,
                 on_status=on_status,
             )
@@ -374,7 +371,8 @@ async def chat(
                     "text": final,
                     "provider": result.get("provider"),
                     "model": result.get("model"),
-                    "difficulty": result.get("difficulty"),
+                    "chat_model": result.get("chat_model") or result.get("model"),
+                    "logic_model": result.get("logic_model"),
                     "schedule_updated": True,
                 }
             )

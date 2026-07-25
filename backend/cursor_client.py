@@ -1,4 +1,4 @@
-"""Cursor Cloud Agents REST client — 用于困难任务与自迭代。"""
+"""Cursor Cloud Agents REST client — 用于内部逻辑（默认 Grok）。"""
 
 from __future__ import annotations
 

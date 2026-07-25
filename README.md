@@ -18,23 +18,23 @@
 | 端 | 入口 | 用户 | 目标 |
 |---|---|---|---|
 | 前台 | `/` | 小葡萄 | 可爱易用的 chatbot；默认打字（可选语音）；问今日安排/钢琴课/该在哪 |
-| 家长端 | `/parent` | 爸爸、妈妈、奶奶 | 今日提醒看板、周程预览、编辑日程 JSON、家长对话 |
+| 家长端 | `/parent` | 爸爸、妈妈、奶奶 | 周程可视、今日提醒、地点路程、家长对话 |
 
 ### 1.2 核心能力
 
-1. **预制日程表**作为每次 chat 的系统上下文（地点、路程缓冲、按成员 @ 的提前提醒）。
+1. **预制日程表**作为每次 chat 的系统上下文（地点、路程缓冲、按成员的提前提醒）。
 2. **语音**：百炼 ASR（`qwen3-asr-flash`）+ TTS（`cosyvoice-v2`）；截图经视觉模型转写后再进对话。
-3. **双模型路由**：
-   - 默认：百炼 **DeepSeek V4 Flash**（`deepseek-v4-flash`）+ 日程 function calling
-   - 困难任务：Cursor Cloud Agents **Grok 4.5**（`grok-4.5`）
-4. **提醒对象自动选定**：用户只需说行程；管家按角色决定提醒谁（孩子/接送家长等）并写入 `reminders`。用户不必在对话里写 `@`。
+3. **模型分工**：
+   - **对话（对用户）**：一律百炼 **DeepSeek**（`DEEPSEEK_MODEL`，默认 `deepseek-v4-flash`）
+   - **内部逻辑**：默认 Cursor **Grok**（`CURSOR_MODEL_ID`，默认 `grok-4.5`）规划写库与提醒对象；未配置时回退 DeepSeek 写库
+4. **提醒对象自动选定**：用户只需说行程；Grok 按角色决定提醒谁并写入 `reminders`。用户不必在对话里写 `@`。
 
 ### 1.3 非目标（当前阶段不做）
 
 - 真实推送（APNs / 微信服务号 / 短信）
 - 地图导航与实时路况
-- 完整可视化日程编辑器（目前家长端用 JSON 高级编辑）
-- 自迭代自动改代码 / 无人值守部署闭环（已移除，先把基础功能做好）
+- 给普通人看的 JSON 编辑器（已隐藏）
+- 自迭代自动改代码 / 无人值守部署闭环（已移除）
 
 ---
 
@@ -46,8 +46,10 @@
 grape-schedule/
   backend/
     store.py             # 统一持久化：data/app_store.json（日程 + 变更日志）
-    schedule_tools.py    # 大模型 function calling → 真正写库；reminders 必填
-    schedule_context.py  # 按 @成员 展开今日提醒
+    logic_grok.py        # 内部逻辑：Grok 规划写库动作
+    schedule_tools.py    # 工具执行 → 真正写库；reminders 必填
+    schedule_context.py  # 按成员展开今日提醒
+    model_router.py      # 对话 DeepSeek + 逻辑 Grok
     ...
   data/app_store.json    # 唯一业务数据源（部署时不覆盖服务器已有文件）
 ```
@@ -66,7 +68,7 @@ grape-schedule/
 ### 2.3 统一存储与写库规则
 
 - **唯一数据源**：服务器本地文件 `data/app_store.json`（不接外部数据库/云存储）。
-- 家长在对话中告知行程时，DeepSeek 必须调用工具落库。
+- 家长在对话中告知行程时，由 **Grok 内部逻辑**规划并调用工具落库；**DeepSeek** 只对用户说话。
 - 禁止编造与「示例」地址；库空时只能说未录入。
 - 会话在 `data/sessions/`。
 
@@ -76,12 +78,13 @@ grape-schedule/
 - `dad` / `mom` / `grandma`（parent）→ 家长端
 - 无密码：点选身份即可进入；会话存 `data/sessions/{user_id}/`
 
-### 2.5 模型路由策略
+### 2.5 模型分工
 
-| 难度 | 触发 | Provider |
+| 用途 | 模型 | 说明 |
 |---|---|---|
-| `easy` | 默认日常问答 | DeepSeek `DEEPSEEK_MODEL` |
-| `hard` | 关键词：复杂规划/架构设计等，或超长输入 | Cursor `CURSOR_MODEL_ID` |
+| 对话（对用户） | DeepSeek `DEEPSEEK_MODEL` | 前台/家长端所有可见回复 |
+| 内部逻辑 | Grok `CURSOR_MODEL_ID` | 规划写库、选定提醒对象；需 `CURSOR_API_KEY` |
+| 回退 | DeepSeek 兼写库 | 未配置 Cursor 时家长端仍可用 |
 
 ### 2.6 语音与 HTTPS
 
