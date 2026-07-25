@@ -76,10 +76,31 @@ from pathlib import Path
 p = Path("data/app_store.json")
 if p.exists():
     data = json.loads(p.read_text(encoding="utf-8"))
+    changed = False
     if "self_iterate" in data:
         data.pop("self_iterate", None)
+        changed = True
+    sch = data.get("schedule") if isinstance(data.get("schedule"), dict) else None
+    if sch is not None:
+        home = sch.get("home") if isinstance(sch.get("home"), dict) else {}
+        home_name = (home.get("name") or "家").strip() or "家"
+        places = []
+        for item in sch.get("places") or []:
+            if not isinstance(item, dict):
+                continue
+            if item.get("id") == "home":
+                changed = True
+                continue
+            if (item.get("name") or "").strip() in (home_name, "家", "家里"):
+                changed = True
+                continue
+            places.append(item)
+        if places != (sch.get("places") or []):
+            sch["places"] = places
+            changed = True
+    if changed:
         p.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        print("已从 app_store.json 移除 self_iterate")
+        print("已清理 app_store.json（自迭代字段 / 重复的家）")
 PY
 
 cat > /etc/systemd/system/grape-schedule.service <<UNIT
