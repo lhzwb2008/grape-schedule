@@ -314,12 +314,20 @@ function encodeWav(floatChunks, sampleRate) {
 
 function setVoiceMode(on) {
   state.voiceMode = !!on;
-  if (inputEl) inputEl.hidden = state.voiceMode;
-  if (holdBtn) holdBtn.hidden = !state.voiceMode;
+  // 统一用 .hidden class（勿只改 element.hidden，否则会与 HTML class="hidden" 打架）
+  if (inputEl) {
+    inputEl.hidden = false;
+    inputEl.classList.toggle("hidden", state.voiceMode);
+  }
+  if (holdBtn) {
+    holdBtn.hidden = false;
+    holdBtn.classList.toggle("hidden", !state.voiceMode);
+  }
   if (sendBtn) sendBtn.classList.toggle("hidden", state.voiceMode || state.sending);
   if (modeBtn) {
     modeBtn.textContent = state.voiceMode ? "⌨️" : "🎤";
     modeBtn.title = state.voiceMode ? "切换文字输入" : "切换语音输入（可选）";
+    modeBtn.setAttribute("aria-label", state.voiceMode ? "切换文字输入" : "切换语音输入");
   }
   document.querySelector(".composer")?.classList.toggle("voice-mode", state.voiceMode);
   updateSendState();
