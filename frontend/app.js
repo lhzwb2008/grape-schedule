@@ -8,10 +8,14 @@ const state = {
   sending: false,
   recording: false,
   asrBusy: false,
-  voiceMode: true,
+  voiceMode: false, // 默认打字；语音为可选
   cancelRecord: false,
-  autoTts: localStorage.getItem("gs_auto_tts") !== "0",
+  autoTts: localStorage.getItem("gs_auto_tts") === "1",
+  attachments: [],
 };
+
+const MAX_ATTACH = 5;
+const MAX_FILE_SIZE = 12 * 1024 * 1024;
 
 const $ = (sel) => document.querySelector(sel);
 const loginView = $("#login-view");
@@ -42,6 +46,9 @@ const voiceHint = $("#voice-hint");
 const voiceOverlay = $("#voice-overlay");
 const secureHint = $("#secure-hint");
 const todayStrip = $("#today-strip");
+const fileInput = $("#file-input");
+const attachPreview = $("#attach-preview");
+const attachBtn = $("#attach-btn");
 
 let mediaRecorder = null;
 let mediaStream = null;
@@ -314,7 +321,11 @@ function setVoiceMode(on) {
   state.voiceMode = !!on;
   if (inputEl) inputEl.hidden = state.voiceMode;
   if (holdBtn) holdBtn.hidden = !state.voiceMode;
-  if (modeBtn) modeBtn.textContent = state.voiceMode ? "⌨️" : "🎤";
+  if (sendBtn) sendBtn.classList.toggle("hidden", state.voiceMode || state.sending);
+  if (modeBtn) {
+    modeBtn.textContent = state.voiceMode ? "⌨️" : "🎤";
+    modeBtn.title = state.voiceMode ? "切换文字输入" : "切换语音输入（可选）";
+  }
   document.querySelector(".composer")?.classList.toggle("voice-mode", state.voiceMode);
   updateSendState();
 }
@@ -660,7 +671,7 @@ if (holdBtn) {
 }
 stopBtn?.addEventListener("click", () => chatAbort?.abort());
 refreshSecureHint();
-setVoiceMode(true);
+setVoiceMode(false);
 
 async function api(path, options = {}) {
   const headers = { ...(options.headers || {}) };
@@ -845,40 +856,193 @@ function bindSuggests(root) {
   });
 }
 
-function appendBubble(role, content, { markdown = false, streaming = false } = {}) {
+function appendBubble(role, content, { markdown = false, streaming = false, previews = [] } = {}) {
   const el = document.createElement("div");
   el.className = `bubble ${role}` + (streaming ? " streaming" : "");
   if (role === "assistant") setBubbleContent(el, content, { markdown: true, streaming });
-  else { el.dataset.rawText = content || ""; el.textContent = content; }
+  else {
+    el.dataset.rawText = content || "";
+    el.textContent = content;
+  }
+  if (role === "user" && previews.length) {
+    const box = document.createElement("div");
+    box.className = "user-attach";
+    for (const p of previews) {
+      if (p.previewUrl) {
+        const img = document.createElement("img");
+        img.src = p.previewUrl;
+        img.alt = p.name || "截图";
+        box.appendChild(img);
+      }
+    }
+    el.appendChild(box);
+  }
   messagesEl.appendChild(el);
   scrollBottom();
   return el;
 }
 
-function scrollBottom() { messagesEl.scrollTop = messagesEl.scrollHeight; }
+function scrollBottom() {
+  requestAnimationFrame(() => {
+    if (!messagesEl) return;
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    const last = messagesEl.lastElementChild;
+    if (last?.scrollIntoView) {
+      try {
+        last.scrollIntoView({ block: "end", behavior: "auto" });
+      } catch {}
+    }
+  });
+}
 
 function updateSendState() {
-  const canSend = !state.sending && !state.asrBusy && !holding && !!state.currentId && !!inputEl.value.trim() && !state.voiceMode;
+  const hasText = !!inputEl.value.trim();
+  const hasFile = state.attachments.length > 0;
+  const canSend =
+    !state.sending &&
+    !state.asrBusy &&
+    !holding &&
+    !!state.currentId &&
+    (hasText || hasFile) &&
+    !state.voiceMode;
   sendBtn.disabled = !canSend;
   sendBtn.classList.toggle("hidden", state.sending || state.voiceMode);
   stopBtn?.classList.toggle("hidden", !state.sending);
   if (holdBtn) holdBtn.disabled = state.sending || state.asrBusy;
   if (modeBtn) modeBtn.disabled = state.sending || holding || state.asrBusy;
+  if (attachBtn) attachBtn.disabled = state.sending || holding || state.recording || state.asrBusy;
+  if (inputEl) inputEl.readOnly = state.sending;
 }
 
-inputEl.addEventListener("input", updateSendState);
-$("#composer").addEventListener("submit", (e) => { e.preventDefault(); sendMessage(); });
+function clearAttachments() {
+  for (const a of state.attachments) {
+    if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+  }
+  state.attachments = [];
+  renderAttachPreview();
+  updateSendState();
+}
+
+function renderAttachPreview() {
+  if (!attachPreview) return;
+  attachPreview.innerHTML = "";
+  if (!state.attachments.length) {
+    attachPreview.classList.add("hidden");
+    return;
+  }
+  attachPreview.classList.remove("hidden");
+  for (const a of state.attachments) {
+    const chip = document.createElement("div");
+    chip.className = "attach-chip";
+    chip.innerHTML = a.previewUrl
+      ? `<img src="${a.previewUrl}" alt="" />`
+      : `<div>${escapeHtml(a.name)}</div>`;
+    const rm = document.createElement("button");
+    rm.type = "button";
+    rm.className = "rm";
+    rm.textContent = "×";
+    rm.addEventListener("click", () => {
+      state.attachments = state.attachments.filter((x) => x.id !== a.id);
+      if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+      renderAttachPreview();
+      updateSendState();
+    });
+    chip.appendChild(rm);
+    attachPreview.appendChild(chip);
+  }
+}
+
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error(`读取失败：${file.name}`));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function addFiles(fileList) {
+  const files = [...(fileList || [])];
+  for (const file of files) {
+    if (state.attachments.length >= MAX_ATTACH) {
+      alert(`一次最多 ${MAX_ATTACH} 张图`);
+      break;
+    }
+    if (file.size > MAX_FILE_SIZE) {
+      alert(`${file.name || "文件"} 超过 12MB`);
+      continue;
+    }
+    const mime = file.type || "image/jpeg";
+    if (!mime.startsWith("image/")) {
+      alert("目前只支持图片截图");
+      continue;
+    }
+    try {
+      const dataUrl = await readFileAsBase64(file);
+      state.attachments.push({
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        name: file.name || `screenshot-${Date.now()}.png`,
+        mime,
+        data: dataUrl,
+        previewUrl: URL.createObjectURL(file),
+      });
+    } catch (err) {
+      alert(err.message);
+    }
+  }
+  renderAttachPreview();
+  updateSendState();
+}
+
+attachBtn?.addEventListener("click", () => fileInput?.click());
+fileInput?.addEventListener("change", async () => {
+  await addFiles(fileInput.files);
+  fileInput.value = "";
+});
+
+inputEl.addEventListener("input", () => {
+  inputEl.style.height = "auto";
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + "px";
+  updateSendState();
+});
+inputEl.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  if (e.isComposing || e.keyCode === 229) return;
+  if (e.altKey || e.metaKey) {
+    e.preventDefault();
+    if (!sendBtn.disabled) sendMessage();
+  }
+});
+inputEl.addEventListener("paste", async (e) => {
+  if (state.sending) return;
+  const items = [...(e.clipboardData?.items || [])].filter((i) => i.kind === "file");
+  const files = items.map((i) => i.getAsFile()).filter(Boolean);
+  if (!files.length) return;
+  e.preventDefault();
+  await addFiles(files);
+});
+
+$("#composer").addEventListener("submit", (e) => {
+  e.preventDefault();
+  sendMessage();
+});
 
 async function sendMessage() {
   const text = inputEl.value.trim();
-  if (!text || state.sending || !state.currentId) return;
+  const pending = [...state.attachments];
+  if ((!text && !pending.length) || state.sending || !state.currentId) return;
   messagesEl.querySelector(".welcome")?.remove();
   state.sending = true;
   chatAbort = new AbortController();
   if (state.autoTts) unlockAudioPlayback();
   updateSendState();
   inputEl.value = "";
-  appendBubble("user", text);
+  inputEl.style.height = "auto";
+  state.attachments = [];
+  renderAttachPreview();
+
+  const previews = pending.map((a) => ({ name: a.name, previewUrl: a.previewUrl }));
+  appendBubble("user", text || "（截图）", { previews });
   const bubble = appendBubble("assistant", "正在想…", { markdown: true, streaming: true });
   let finalText = "";
   let gotDelta = false;
@@ -886,7 +1050,10 @@ async function sendMessage() {
     const res = await fetch(`/api/sessions/${state.currentId}/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${state.token}` },
-      body: JSON.stringify({ message: text }),
+      body: JSON.stringify({
+        message: text,
+        attachments: pending.map((a) => ({ name: a.name, mime: a.mime, data: a.data })),
+      }),
       signal: chatAbort.signal,
     });
     if (!res.ok) {
@@ -906,34 +1073,53 @@ async function sendMessage() {
         const line = part.split("\n").find((l) => l.startsWith("data: "));
         if (!line) continue;
         let payload;
-        try { payload = JSON.parse(line.slice(6)); } catch { continue; }
+        try {
+          payload = JSON.parse(line.slice(6));
+        } catch {
+          continue;
+        }
         if (payload.type === "status" && payload.message && !gotDelta) {
           setBubbleContent(bubble, payload.message, { streaming: true });
+          scrollBottom();
         } else if (payload.type === "delta" && payload.text) {
-          if (!gotDelta) { gotDelta = true; finalText = ""; }
-          if (payload.text.startsWith(finalText) && payload.text.length >= finalText.length) finalText = payload.text;
-          else finalText += payload.text;
+          if (!gotDelta) {
+            gotDelta = true;
+            finalText = "";
+          }
+          if (payload.text.startsWith(finalText) && payload.text.length >= finalText.length) {
+            finalText = payload.text;
+          } else finalText += payload.text;
           setBubbleContent(bubble, finalText, { markdown: true, streaming: true });
+          scrollBottom();
         } else if (payload.type === "done") {
           finalText = payload.text || finalText;
           setBubbleContent(bubble, finalText, { markdown: true, streaming: false });
+          scrollBottom();
         } else if (payload.type === "error") {
           setBubbleContent(bubble, `抱歉：${payload.message}`, { streaming: false });
+          scrollBottom();
         }
       }
     }
     if (finalText) {
       setBubbleContent(bubble, finalText, { markdown: true, streaming: false });
+      scrollBottom();
       maybeAutoPlayTts(bubble);
     }
     await refreshSessions();
+    await loadTodayStrip();
   } catch (err) {
     if (err?.name === "AbortError") setBubbleContent(bubble, "（已停止）", { streaming: false });
     else setBubbleContent(bubble, `抱歉：${err.message}`, { streaming: false });
+    scrollBottom();
   } finally {
+    for (const a of pending) {
+      if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+    }
     chatAbort = null;
     state.sending = false;
     updateSendState();
+    if (!state.voiceMode) inputEl.focus();
   }
 }
 

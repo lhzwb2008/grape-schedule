@@ -93,9 +93,45 @@ class LoginBody(BaseModel):
     password: str = Field(min_length=4, max_length=64)
 
 
+class AttachmentIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    mime: str = Field(min_length=1, max_length=100)
+    data: str = Field(min_length=1)
+
+
 class ChatBody(BaseModel):
     message: str = Field(default="", max_length=8000)
     force_model: str | None = Field(default=None, description="easy|hard|self_iterate")
+    attachments: list[AttachmentIn] = Field(default_factory=list)
+
+
+IMAGE_MIMES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+MAX_ATTACHMENTS = 5
+MAX_FILE_BYTES = 12 * 1024 * 1024
+
+
+def _prepare_images(attachments: list[AttachmentIn]) -> tuple[list[dict[str, str]], list[str]]:
+    if len(attachments) > MAX_ATTACHMENTS:
+        raise HTTPException(400, f"一次最多 {MAX_ATTACHMENTS} 张图")
+    images: list[dict[str, str]] = []
+    names: list[str] = []
+    for att in attachments:
+        mime = (att.mime or "").split(";")[0].strip().lower()
+        name = att.name.strip() or "image"
+        raw_b64 = _strip_b64(att.data).strip()
+        try:
+            raw = base64.b64decode(raw_b64, validate=False)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(400, f"附件 {name} 解码失败") from e
+        if len(raw) > MAX_FILE_BYTES:
+            raise HTTPException(400, f"附件 {name} 超过 12MB")
+        if mime not in IMAGE_MIMES and not mime.startswith("image/"):
+            raise HTTPException(400, f"仅支持图片：png/jpeg/gif/webp（收到 {mime}）")
+        if mime not in IMAGE_MIMES:
+            mime = "image/jpeg"
+        images.append({"mime": mime, "data_b64": raw_b64})
+        names.append(name)
+    return images, names
 
 
 class SessionCreateBody(BaseModel):
@@ -295,8 +331,12 @@ async def chat(
         raise HTTPException(404, str(e)) from e
 
     message = (body.message or "").strip()
-    if not message:
-        raise HTTPException(400, "请输入消息")
+    try:
+        images, attach_names = _prepare_images(body.attachments or [])
+    except HTTPException:
+        raise
+    if not message and not attach_names:
+        raise HTTPException(400, "请输入消息或上传截图")
 
     force = body.force_model if body.force_model in ("easy", "hard", "self_iterate") else None
     if force == "self_iterate" or classify_difficulty(message) == "self_iterate":
@@ -306,7 +346,6 @@ async def chat(
             raise HTTPException(403, str(e)) from e
         force = "self_iterate"
 
-    # 简单关键词也可触发自迭代意图检测
     if "自迭代" in message or "自动改代码" in message:
         try:
             self_iterate.require_activated()
@@ -314,7 +353,11 @@ async def chat(
         except PermissionError as e:
             raise HTTPException(403, str(e)) from e
 
-    storage.append_message(user_id, session_id, "user", message)
+    stored_user = message or "（发送了截图）"
+    if attach_names:
+        stored_user += "\n📎 " + "、".join(attach_names) + "（仅本轮使用）"
+
+    storage.append_message(user_id, session_id, "user", stored_user)
     history = [
         {"role": m["role"], "content": m["content"]}
         for m in (session.get("messages") or [])
@@ -329,8 +372,20 @@ async def chat(
 
     def _worker() -> None:
         agent_id = session.get("agent_id")
+        chat_text = message
         try:
             _emit({"type": "status", "message": "已收到，正在准备…"})
+
+            if images:
+                from backend.vision import describe_images
+
+                _emit({"type": "status", "message": "正在看截图…"})
+                desc = describe_images(images, hint=message)
+                chat_text = (
+                    (message + "\n\n" if message else "")
+                    + "【用户上传截图识别结果】\n"
+                    + (desc or "（未能识别图中文字）")
+                )
 
             def on_delta(t: str) -> None:
                 _emit({"type": "delta", "text": t})
@@ -341,7 +396,7 @@ async def chat(
             result = run_chat(
                 member,
                 history,
-                message,
+                chat_text,
                 force_difficulty=force,  # type: ignore[arg-type]
                 session_agent_id=agent_id if force in ("hard", "self_iterate") else None,
                 on_delta=on_delta,
@@ -359,7 +414,7 @@ async def chat(
             if force == "self_iterate":
                 self_iterate.record_request(
                     user_id,
-                    message,
+                    chat_text,
                     {
                         "provider": result.get("provider"),
                         "model": result.get("model"),
