@@ -1,0 +1,11 @@
+.env
+.deploy.secret
+data/users/
+data/sessions/
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.log
+.DS_Store
+.cursor/

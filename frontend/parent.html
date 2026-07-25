@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <title>家长端 · 小葡萄日程管家</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@500;700;800&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css?v=1" />
+  <script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"></script>
+</head>
+<body class="view-parent">
+  <div class="bg-wash parent" aria-hidden="true"></div>
+
+  <section id="login-view" class="view login-view">
+    <header class="login-hero">
+      <div class="brand-mark parent" aria-hidden="true"><span class="seed"></span></div>
+      <h1 class="brand-title">家长端</h1>
+      <p class="brand-sub">监管 · 提醒 · 路程与地点</p>
+    </header>
+    <div class="login-panel">
+      <p class="panel-label">选择家长身份</p>
+      <div id="member-grid" class="member-grid"></div>
+      <form id="login-form" class="login-form hidden">
+        <div class="selected-chip" id="selected-chip"></div>
+        <label class="field">
+          <span id="password-label">设置密码</span>
+          <input id="password-input" type="password" autocomplete="current-password" placeholder="至少 4 位" minlength="4" required />
+        </label>
+        <p id="login-hint" class="hint">首次进入请设置密码</p>
+        <p id="login-error" class="error hidden"></p>
+        <button type="submit" class="btn-primary tap" id="login-btn">进入管家</button>
+        <button type="button" class="btn-ghost tap" id="back-btn">重选</button>
+      </form>
+      <p class="switch-link"><a href="/">← 小葡萄前台</a></p>
+    </div>
+  </section>
+
+  <section id="app-view" class="view parent-app hidden">
+    <header class="parent-top">
+      <div>
+        <div class="side-title">小葡萄日程管家</div>
+        <div class="side-user" id="side-user"></div>
+      </div>
+      <div class="parent-top-actions">
+        <button type="button" class="btn-ghost tap" id="logout-btn">退出</button>
+      </div>
+    </header>
+
+    <div class="parent-grid">
+      <section class="panel">
+        <h3>今日提醒看板</h3>
+        <p class="muted" id="board-meta"></p>
+        <div id="reminder-board" class="reminder-board"></div>
+      </section>
+
+      <section class="panel">
+        <h3>完整周程（只读预览）</h3>
+        <div id="week-list" class="week-list"></div>
+        <details class="raw-edit">
+          <summary>高级：编辑日程 JSON</summary>
+          <textarea id="schedule-json" rows="14" spellcheck="false"></textarea>
+          <button type="button" class="btn-primary tap" id="save-schedule-btn">保存日程</button>
+          <p id="schedule-msg" class="hint"></p>
+        </details>
+      </section>
+
+      <section class="panel chat-panel">
+        <h3>家长对话</h3>
+        <div class="messages compact" id="messages"></div>
+        <form class="composer" id="composer">
+          <textarea id="input" rows="2" placeholder="问行程、接送、提醒策略…"></textarea>
+          <button type="submit" class="btn-send tap" id="send-btn">发送</button>
+        </form>
+      </section>
+
+      <section class="panel deep-panel">
+        <h3>深度功能：自迭代</h3>
+        <p class="muted">激活后，可用 Cursor Grok 按需求改代码（仍需人工确认部署）。默认关闭。</p>
+        <div id="iterate-status" class="iterate-status"></div>
+        <form id="activate-form" class="activate-form">
+          <input id="activate-code" type="password" placeholder="深度激活口令" autocomplete="off" />
+          <button type="submit" class="btn-primary tap">激活</button>
+          <button type="button" class="btn-ghost tap" id="deactivate-btn">关闭</button>
+        </form>
+        <p id="iterate-msg" class="hint"></p>
+      </section>
+    </div>
+  </section>
+
+  <script src="/static/parent.js?v=1"></script>
+</body>
+</html>

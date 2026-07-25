@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <title>小葡萄 · 日程小助手</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@500;700;800&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css?v=1" />
+  <script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"></script>
+</head>
+<body class="view-child">
+  <div class="bg-wash" aria-hidden="true"></div>
+  <div class="bg-blob a" aria-hidden="true"></div>
+  <div class="bg-blob b" aria-hidden="true"></div>
+
+  <section id="login-view" class="view login-view">
+    <header class="login-hero">
+      <div class="brand-mark" aria-hidden="true"><span class="seed"></span></div>
+      <h1 class="brand-title">小葡萄</h1>
+      <p class="brand-sub">日程小助手 · 按住说话就能问</p>
+    </header>
+    <div class="login-panel">
+      <p class="panel-label">我是谁？</p>
+      <div id="member-grid" class="member-grid"></div>
+      <form id="login-form" class="login-form hidden">
+        <div class="selected-chip" id="selected-chip"></div>
+        <label class="field">
+          <span id="password-label">设置密码</span>
+          <input id="password-input" type="password" autocomplete="current-password" placeholder="至少 4 位" minlength="4" required />
+        </label>
+        <p id="login-hint" class="hint">第一次来先设一个小密码哦</p>
+        <p id="login-error" class="error hidden"></p>
+        <button type="submit" class="btn-primary tap" id="login-btn">开始</button>
+        <button type="button" class="btn-ghost tap" id="back-btn">重选</button>
+      </form>
+      <p class="switch-link"><a href="/parent">家长入口 →</a></p>
+    </div>
+  </section>
+
+  <section id="chat-view" class="view chat-view hidden">
+    <div id="sidebar-mask" class="sidebar-mask" hidden></div>
+    <aside class="sidebar" id="sidebar">
+      <div class="side-brand">
+        <div class="brand-mark sm" aria-hidden="true"><span class="seed"></span></div>
+        <div>
+          <div class="side-title">小葡萄助手</div>
+          <div class="side-user" id="side-user"></div>
+        </div>
+        <button type="button" class="btn-side-close tap" id="sidebar-close" aria-label="关闭">✕</button>
+      </div>
+      <button class="btn-new tap" id="new-session-btn">＋ 新对话</button>
+      <div class="session-list" id="session-list"></div>
+      <button class="btn-logout tap" id="logout-btn">退出</button>
+    </aside>
+
+    <main class="chat-main">
+      <header class="chat-top">
+        <button type="button" class="btn-menu tap" id="menu-btn" aria-label="菜单">☰</button>
+        <h2 id="chat-title" class="chat-title">今日日程</h2>
+        <div class="chat-top-actions">
+          <button type="button" class="btn-auto-tts tap on" id="auto-tts-btn" title="自动播报" aria-pressed="true">🔊</button>
+          <button class="btn-icon danger tap hidden" id="delete-session-btn">删除</button>
+        </div>
+      </header>
+
+      <div id="today-strip" class="today-strip" aria-live="polite"></div>
+
+      <div class="messages" id="messages">
+        <div class="welcome" id="welcome">
+          <h3>嗨，小葡萄！</h3>
+          <p>今天要做什么、什么时候出发，问我就好。按住下面说话最方便～</p>
+          <div class="suggests">
+            <button type="button" class="tap" data-q="今天有什么安排？">今天安排</button>
+            <button type="button" class="tap" data-q="下一节钢琴课是什么时候？要提前多久出门？">钢琴课</button>
+            <button type="button" class="tap" data-q="我现在应该在哪里？">我在哪段行程</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="composer-wrap">
+        <div id="voice-overlay" class="voice-overlay hidden" aria-live="polite">
+          <p id="voice-hint" class="voice-hint">松开发送，上滑取消</p>
+        </div>
+        <div id="secure-hint" class="secure-hint hidden"></div>
+        <form class="composer voice-mode" id="composer">
+          <button type="button" class="btn-mode tap" id="mode-btn" title="切换文字" aria-label="切换文字">⌨️</button>
+          <textarea id="input" rows="1" placeholder="想问什么…" hidden></textarea>
+          <button type="button" class="btn-hold tap" id="hold-btn">按住 说话</button>
+          <button type="submit" class="btn-send tap hidden" id="send-btn" disabled>发送</button>
+          <button type="button" class="btn-stop tap hidden" id="stop-btn">停止</button>
+        </form>
+      </div>
+    </main>
+  </section>
+
+  <script src="/static/app.js?v=1"></script>
+</body>
+</html>
