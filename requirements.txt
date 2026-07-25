@@ -3,3 +3,4 @@ uvicorn[standard]>=0.32.0
 python-multipart>=0.0.12
 python-dotenv>=1.0.1
 aiofiles>=24.1.0
+websockets>=14.0

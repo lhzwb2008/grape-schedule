@@ -423,6 +423,9 @@ body.view-parent { overflow: auto; overscroll-behavior: auto; }
   flex: 1; min-height: 220px; max-height: 420px;
   background: rgba(255,255,255,0.55); border-radius: 14px; border: 1px solid var(--line);
 }
+.parent-composer { margin-top: 10px; }
+.parent-top-actions { display: flex; gap: 8px; align-items: center; }
+.btn-tts { display: none !important; }
 .raw-edit { margin-top: 14px; }
 .raw-edit summary {
   cursor: pointer; font-weight: 700; color: var(--muted); font-size: 0.88rem;

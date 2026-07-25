@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -23,6 +23,7 @@ from backend import storage
 from backend.dashscope_voice import recognize as asr_recognize
 from backend.dashscope_voice import synthesize as tts_synthesize
 from backend.model_router import run_chat
+from backend.omni_realtime import asr_session_update_payload, realtime_ws_url
 from backend.schedule_context import format_schedule_for_api
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -166,6 +167,7 @@ def health():
         "name": "小葡萄日程提醒智能体",
         "chat_model": os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash"),
         "logic_model": os.environ.get("CURSOR_MODEL_ID", "grok-4.5"),
+        "omni_model": os.environ.get("DASHSCOPE_OMNI_MODEL", "qwen3.5-omni-flash-realtime"),
         "default_model": os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash"),
         "hard_model": os.environ.get("CURSOR_MODEL_ID", "grok-4.5"),
         "https_host": https_host,
@@ -419,6 +421,109 @@ def index():
 @app.get("/parent")
 def parent_page():
     return FileResponse(FRONTEND / "parent.html")
+
+
+@app.websocket("/api/voice/ws")
+async def voice_asr_ws(websocket: WebSocket, token: str = Query(default="")):
+    """浏览器 ↔ 本服务 ↔ 百炼 Omni Realtime（按住说话加速转写）。"""
+    try:
+        _auth_token(token)
+    except HTTPException:
+        await websocket.close(code=4401)
+        return
+
+    api_key = os.environ.get("DASHSCOPE_API_KEY", "").strip()
+    if not api_key:
+        await websocket.close(code=4502, reason="未配置 DASHSCOPE_API_KEY")
+        return
+
+    await websocket.accept()
+    await websocket.send_json({"type": "client.status", "status": "connecting"})
+
+    import websockets
+    from websockets.exceptions import ConnectionClosed
+
+    upstream = None
+    try:
+        upstream = await websockets.connect(
+            realtime_ws_url(),
+            additional_headers={"Authorization": f"Bearer {api_key}"},
+            open_timeout=20,
+            max_size=8 * 1024 * 1024,
+        )
+    except Exception as e:  # noqa: BLE001
+        await websocket.send_json({"type": "client.error", "message": f"连接语音服务失败：{e}"})
+        await websocket.close(code=4502)
+        return
+
+    async def client_to_upstream() -> None:
+        try:
+            while True:
+                raw = await websocket.receive_text()
+                try:
+                    evt = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(evt, dict):
+                    continue
+                et = evt.get("type")
+                if et == "session.update":
+                    continue
+                if et == "client.ping":
+                    await websocket.send_json({"type": "client.pong"})
+                    continue
+                await upstream.send(raw)
+        except WebSocketDisconnect:
+            pass
+        except ConnectionClosed:
+            pass
+
+    async def upstream_to_client() -> None:
+        configured = False
+        try:
+            async for message in upstream:
+                text = message if isinstance(message, str) else message.decode("utf-8", "ignore")
+                await websocket.send_text(text)
+                if not configured:
+                    try:
+                        evt = json.loads(text)
+                    except json.JSONDecodeError:
+                        evt = {}
+                    if isinstance(evt, dict) and evt.get("type") == "session.created":
+                        configured = True
+                        await upstream.send(json.dumps(asr_session_update_payload(), ensure_ascii=False))
+                        await websocket.send_json({"type": "client.status", "status": "ready"})
+        except ConnectionClosed:
+            pass
+        except WebSocketDisconnect:
+            pass
+
+    try:
+        done, pending = await asyncio.wait(
+            [
+                asyncio.create_task(client_to_upstream()),
+                asyncio.create_task(upstream_to_client()),
+            ],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for t in pending:
+            t.cancel()
+        for t in done:
+            exc = t.exception()
+            if exc:
+                try:
+                    await websocket.send_json({"type": "client.error", "message": str(exc)})
+                except Exception:  # noqa: BLE001
+                    pass
+    finally:
+        try:
+            await upstream.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            await websocket.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 app.mount("/static", StaticFiles(directory=str(FRONTEND)), name="static")
