@@ -59,23 +59,21 @@ grape-schedule/
 - 禁止编造与「示例」地址；库空时只能说未录入，不能臆造钢琴课等。
 - 账户会话仍在 `data/users/`、`data/sessions/`；与日程同属服务器本地持久化。
 
-### 2.2 账户与角色
+### 2.3 账户与角色
 
 - `xiaoputao`（child）→ 前台
 - `dad` / `mom` / `grandma`（parent）→ 家长端
 - 首次登录设置密码，bcrypt 存 `data/users/`；会话存 `data/sessions/{user_id}/`
 
-### 2.3 日程上下文注入
+### 2.4 日程上下文注入
 
 每次 `POST /api/sessions/{id}/chat`：
 
-1. `build_schedule_context(member)` 生成「当前时间 / 今日行程 / 地点 / 路程缓冲 / 语气要求」
-2. 写入 system prompt（孩子语气 vs 家长语气不同）
-3. 附带最近约 12 轮历史，再请求模型
+1. `build_schedule_context(member)` 从 `app_store.json` 生成上下文（库空则明确为空）
+2. DeepSeek 可调用日程工具写库后再回答
+3. 附带最近约 12 轮历史
 
-预制示例见 `data/schedule.json`（含周三/周六钢琴课与路程缓冲）。
-
-### 2.4 模型路由策略
+### 2.5 模型路由策略
 
 `backend/model_router.py`：
 
@@ -149,7 +147,7 @@ SSHPASS="$(cat .deploy.secret 2>/dev/null || true)" ./scripts/deploy.sh
 
 1. **真实提醒引擎**：基于 `remind_*_minutes` + 路程，定时任务扫描，写 `data/reminders_log.json`，家长看板显示「即将提醒」。
 2. **可视化日程编辑**：拖拽周视图，替代 JSON。
-3. **补全真实地址**：替换 `schedule.json` 示例住址/学校/琴房，标定 `travel_buffers`。
+3. **补全真实地址与路程**：在家长端对话中告知真实住址/学校/琴房与分钟数，由工具写入 `app_store.json`。
 4. **自迭代闭环**：Cursor Agent 改完 → 自动 `git push` + `deploy.sh` + 回归 `/api/health`；失败回滚。
 5. **推送通道**：微信模板消息 / 家庭群机器人。
 6. **儿童安全**：敏感话题拒答策略、家长审计日志。
