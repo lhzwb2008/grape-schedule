@@ -841,7 +841,11 @@ async function sendMessage() {
           finalText = payload.text || finalText;
           setBubbleContent(bubble, finalText, { markdown: true, streaming: false });
           if (state.autoTts) feedStreamingTts(bubble, finalText, { finalize: true });
-          await refreshBoard();
+          try {
+            await refreshBoard();
+          } catch (e) {
+            console.warn("[board]", e);
+          }
         } else if (payload.type === "error") {
           setBubbleContent(bubble, `抱歉：${payload.message}`, { streaming: false });
         }
@@ -850,11 +854,17 @@ async function sendMessage() {
     if (finalText) {
       setBubbleContent(bubble, finalText, { markdown: true, streaming: false });
       if (state.autoTts) feedStreamingTts(bubble, finalText, { finalize: true });
-      await refreshBoard();
+      try {
+        await refreshBoard();
+      } catch (e) {
+        console.warn("[board]", e);
+      }
     }
   } catch (err) {
     if (err?.name === "AbortError") setBubbleContent(bubble, "（已停止）", { streaming: false });
-    else setBubbleContent(bubble, `抱歉：${err.message}`, { streaming: false });
+    // 对话已成功时，勿用后续刷新失败（如部署瞬间 502）覆盖气泡
+    else if (!finalText) setBubbleContent(bubble, `抱歉：${err.message}`, { streaming: false });
+    else console.warn("[chat aftercare]", err);
   } finally {
     chatAbort = null;
     state.sending = false;

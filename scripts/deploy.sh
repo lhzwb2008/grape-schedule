@@ -19,9 +19,7 @@ fi
 RSYNC=(sshpass -e rsync -avz -e "ssh -o StrictHostKeyChecking=accept-new")
 SSH=(sshpass -e ssh -o StrictHostKeyChecking=accept-new)
 
-echo "==> 停止远程服务（如已运行）…"
-"${SSH[@]}" "${USER}@${HOST}" "systemctl stop grape-schedule 2>/dev/null || true"
-
+# 先同步再重启，避免「先停服」导致对话中途 502
 echo "==> 同步代码到 ${REMOTE_DIR}…"
 "${RSYNC[@]}" --delete \
   --exclude '.venv' \
@@ -36,7 +34,7 @@ echo "==> 同步代码到 ${REMOTE_DIR}…"
   --exclude '.deploy.secret' \
   "${ROOT}/" "${USER}@${HOST}:${REMOTE_DIR}/"
 
-echo "==> 远程安装并启动 systemd + HTTPS…"
+echo "==> 远程安装依赖并重启服务…"
 "${SSH[@]}" "${USER}@${HOST}" "bash -s" <<EOF
 set -e
 cd ${REMOTE_DIR}

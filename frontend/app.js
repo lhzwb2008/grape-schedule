@@ -1204,11 +1204,16 @@ async function sendMessage() {
       scrollBottom();
       if (state.autoTts) feedStreamingTts(bubble, finalText, { finalize: true });
     }
-    await refreshSessions();
-    await loadTodayStrip();
+    try {
+      await refreshSessions();
+      await loadTodayStrip();
+    } catch (e) {
+      console.warn("[aftercare]", e);
+    }
   } catch (err) {
     if (err?.name === "AbortError") setBubbleContent(bubble, "（已停止）", { streaming: false });
-    else setBubbleContent(bubble, `抱歉：${err.message}`, { streaming: false });
+    else if (!finalText) setBubbleContent(bubble, `抱歉：${err.message}`, { streaming: false });
+    else console.warn("[chat aftercare]", err);
     scrollBottom();
   } finally {
     for (const a of pending) {
