@@ -96,13 +96,6 @@ def run_chat(
     provider = provider_for(difficulty)
 
     if provider == "deepseek":
-        model = (
-            deepseek_client.hard_model()
-            if difficulty == "hard"
-            else deepseek_client.default_model()
-        )
-        # 默认 easy 走 flash；若被标 hard 但仍选 deepseek 不会发生——hard 走 cursor
-        # 这里 easy 用 flash
         model = deepseek_client.default_model()
         if on_status:
             on_status(f"使用 DeepSeek（{model}）思考中…")
