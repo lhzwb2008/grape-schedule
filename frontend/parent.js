@@ -167,6 +167,10 @@ function abortAll() {
   try { chatAbort?.abort(); } catch {}
   stopCurrentAudio();
   state.sending = false;
+  state.asrBusy = false;
+  try { setRecordingUi(false); } catch {}
+  voiceOverlay?.classList.add("hidden");
+  if (holdBtn) holdBtn.textContent = "按住 说话";
   updateSendState();
 }
 async function unlockAudioPlayback() {
@@ -493,19 +497,17 @@ async function finishCapture({ cancel = false } = {}) {
   state.asrBusy = true; updateSendState();
   setRecordingUi(false, { recognizing: true });
   voiceOverlay?.classList.remove("hidden");
-  if (voiceHint) voiceHint.textContent = "正在识别（Omni）…";
+  if (voiceHint) voiceHint.textContent = "正在识别…";
   if (holdBtn) holdBtn.textContent = "识别中…";
   try {
     let text = "";
-    try { text = (await transcribeWithOmni([samples], sampleRate)).trim(); }
-    catch (omniErr) {
-      console.warn("[asr] omni fallback", omniErr);
-      if (voiceHint) voiceHint.textContent = "正在识别…";
-      const blob = encodeWavSamples(samples, sampleRate);
-      const dataUrl = await blobToBase64(blob);
-      const data = await api("/api/asr", { method: "POST", body: JSON.stringify({ audio: dataUrl, mime: "audio/wav" }) });
-      text = (data.text || "").trim();
-    }
+    const blob = encodeWavSamples(samples, sampleRate);
+    const dataUrl = await blobToBase64(blob);
+    const data = await api("/api/asr", {
+      method: "POST",
+      body: JSON.stringify({ audio: dataUrl, mime: "audio/wav" }),
+    });
+    text = (data.text || "").trim();
     if (!text || isWeakAsrText(text)) {
       alert(text ? `只听清了「${text}」，请靠近麦克风、说完整再试` : "没有听清，请再说一次");
       return;

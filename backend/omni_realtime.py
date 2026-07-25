@@ -21,22 +21,25 @@ def realtime_ws_url() -> str:
 
 
 def asr_session_update_payload() -> dict:
-    """仅转写、不闲聊，供按住说话加速识别。"""
+    """按住说话：开启输入转写；与通话模式一致用 text+audio 会话更稳。"""
     return {
         "type": "session.update",
         "session": {
-            "modalities": ["text"],
+            "modalities": ["text", "audio"],
+            "voice": os.environ.get("DASHSCOPE_OMNI_VOICE", "Tina").strip() or "Tina",
             "instructions": (
-                "你是语音转写器。把用户说的话转成简洁中文文字。"
-                "不要回答问题，不要寒暄，不要加标点以外的解释。"
+                "你是语音转写助手。用户说话后，只需把内容转成简洁中文，"
+                "不要扩展回答、不要寒暄。"
             ),
             "input_audio_format": "pcm",
+            "output_audio_format": "pcm",
             "input_audio_transcription": {
                 "model": os.environ.get(
                     "DASHSCOPE_OMNI_ASR_MODEL",
                     "qwen3-asr-flash-realtime",
                 ).strip(),
             },
+            # 手动松手提交，不用服务端 VAD 打断
             "turn_detection": None,
         },
     }

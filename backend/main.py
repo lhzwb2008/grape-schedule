@@ -479,20 +479,27 @@ async def voice_asr_ws(websocket: WebSocket, token: str = Query(default="")):
             pass
 
     async def upstream_to_client() -> None:
-        configured = False
+        session_ready = False
         try:
             async for message in upstream:
                 text = message if isinstance(message, str) else message.decode("utf-8", "ignore")
                 await websocket.send_text(text)
-                if not configured:
-                    try:
-                        evt = json.loads(text)
-                    except json.JSONDecodeError:
-                        evt = {}
-                    if isinstance(evt, dict) and evt.get("type") == "session.created":
-                        configured = True
-                        await upstream.send(json.dumps(asr_session_update_payload(), ensure_ascii=False))
-                        await websocket.send_json({"type": "client.status", "status": "ready"})
+                try:
+                    evt = json.loads(text)
+                except json.JSONDecodeError:
+                    evt = {}
+                if not isinstance(evt, dict):
+                    continue
+                et = evt.get("type")
+                if et == "session.created" and not session_ready:
+                    await upstream.send(json.dumps(asr_session_update_payload(), ensure_ascii=False))
+                elif et == "session.updated" and not session_ready:
+                    session_ready = True
+                    await websocket.send_json({"type": "client.status", "status": "ready"})
+                elif et == "error" and not session_ready:
+                    err = evt.get("error") if isinstance(evt.get("error"), dict) else {}
+                    msg = err.get("message") or evt.get("message") or "Omni 会话错误"
+                    await websocket.send_json({"type": "client.error", "message": str(msg)})
         except ConnectionClosed:
             pass
         except WebSocketDisconnect:
