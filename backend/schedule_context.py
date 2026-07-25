@@ -100,34 +100,51 @@ def upcoming_reminders(
     member_id: str | None = None,
     when: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    """按被 @ 的人展开今日提醒。"""
+    """今日提醒：一条行程一条；多角色写在 targets 里。
+
+    若指定 member_id，则只返回该成员相关行程（仍一条行程一条，targets 仅含此人）。
+    """
     when = when or now_local()
     now_hm = when.strftime("%H:%M")
     out = []
     for ev in today_items(schedule, when=when):
+        targets = []
         for r in ev.get("reminders") or []:
             mid = r.get("member_id")
             if member_id and mid != member_id:
                 continue
             m = storage.get_member(str(mid or ""))
-            start = ev.get("start") or ""
-            out.append(
+            targets.append(
                 {
-                    "id": ev.get("id"),
-                    "title": ev.get("title"),
-                    "start": start,
-                    "end": ev.get("end"),
-                    "place_name": ev.get("place_name"),
-                    "place_address": ev.get("place_address"),
                     "member_id": mid,
                     "member_name": (m or {}).get("name") or mid,
                     "member_emoji": (m or {}).get("emoji") or "",
                     "advance_minutes": r.get("minutes_before", 30),
-                    "at_text": f"@{(m or {}).get('name') or mid}",
-                    "notes": ev.get("notes") or "",
-                    "passed": bool(start and start < now_hm),
                 }
             )
+        if not targets:
+            continue
+        start = ev.get("start") or ""
+        at_bits = [
+            f"@{t['member_name']}（提前{t['advance_minutes']}分）" for t in targets
+        ]
+        out.append(
+            {
+                "id": ev.get("id"),
+                "title": ev.get("title"),
+                "start": start,
+                "end": ev.get("end"),
+                "place_name": ev.get("place_name"),
+                "place_address": ev.get("place_address"),
+                "targets": targets,
+                "member_id": targets[0]["member_id"],
+                "member_name": targets[0]["member_name"],
+                "advance_minutes": targets[0]["advance_minutes"],
+                "at_text": " ".join(at_bits),
+                "notes": ev.get("notes") or "",
+                "passed": bool(start and start < now_hm),
+            }
+        )
     return out
 
 
