@@ -763,15 +763,27 @@ async function refreshBoard() {
   renderPlaces(data.schedule || {});
 
   const board = $("#reminder-board");
-  const items = data.reminders || [];
+  // 一条行程一条卡片；多角色写在同卡 at 行（勿按人拆条）
+  const items = data.reminders || data.today || [];
   board.innerHTML = items.length
     ? items
         .map((r) => {
-          const accent = MEMBER_COLORS[r.member_id] || "#2f8f5b";
+          const targets = r.targets || r.reminders || [];
+          const accent =
+            MEMBER_COLORS[r.member_id || targets[0]?.member_id] || eventAccent(r) || "#2f8f5b";
+          const at =
+            r.at_text ||
+            formatReminders(
+              targets.map((t) => ({
+                member_id: t.member_id,
+                minutes_before: t.advance_minutes ?? t.minutes_before,
+              })),
+              data.members
+            );
           return `<div class="reminder-card ${r.passed ? "passed" : ""}" style="--ev-accent:${accent}">
         <div class="title">${escapeHtml(r.title)} · ${escapeHtml(r.start || "")}</div>
         <div class="meta">${escapeHtml(r.place_name || "")} ${escapeHtml(r.place_address || "")}</div>
-        <div class="meta at">提醒 ${escapeHtml(r.member_name || r.at_text || "")} · 提前 ${r.advance_minutes} 分钟</div>
+        <div class="meta at">${escapeHtml(at)}</div>
         <div class="meta">${escapeHtml(r.notes || "")}</div>
       </div>`;
         })
