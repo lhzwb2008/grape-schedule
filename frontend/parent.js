@@ -131,7 +131,7 @@ async function ensureSession() {
   });
   state.currentId = created.session.id;
   messagesEl.innerHTML = "";
-  appendBubble("assistant", "你好，我是小葡萄家庭日程管家。请直接告诉我真实行程（时间、地点、路程），并说明提醒谁，例如 @小葡萄 和 @妈妈；我会写入统一存储。当前若为空，不会使用任何演示数据。");
+  appendBubble("assistant", "你好，我是小葡萄家庭日程管家。直接告诉我真实行程（时间、地点、谁接送）即可，我会写入本地日程，并自动决定该提醒家里哪些人。");
 }
 
 
@@ -232,19 +232,26 @@ function renderWeekCalendar(data) {
     })
     .join("");
   $("#week-meta").textContent = total
-    ? `本周 ${total} 条行程 · 色条表示首位被 @ 的人`
-    : "本周暂无行程——在下方对话录入后会显示在这里";
+    ? `本周 ${total} 条行程 · 色条对应首位提醒对象`
+    : "本周暂无行程——在下方对话里说一声就会显示在这里";
 }
 
 function renderPlaces(schedule) {
   const el = $("#places-board");
-  const places = schedule?.places || [];
   const home = schedule?.home;
+  const places = (schedule?.places || []).filter((p) => {
+    if (!p || p.id === "home") return false;
+    if ((p.name || "") === "家" || (p.name || "") === (home?.name || "家")) return false;
+    return true;
+  });
   const travels = schedule?.travel_buffers || [];
-  const placeName = (id) => places.find((p) => p.id === id)?.name || id;
+  const placeName = (id) => {
+    if (id === "home") return home?.name || "家";
+    return places.find((p) => p.id === id)?.name || (schedule?.places || []).find((p) => p.id === id)?.name || id;
+  };
   const bits = [];
   if (home?.address) {
-    bits.push(`<div class="place-row"><strong>家</strong><span>${escapeHtml(home.address)}</span></div>`);
+    bits.push(`<div class="place-row"><strong>${escapeHtml(home.name || "家")}</strong><span>${escapeHtml(home.address)}</span></div>`);
   } else {
     bits.push(`<div class="place-row muted">家地址尚未录入</div>`);
   }
@@ -284,27 +291,13 @@ async function refreshBoard() {
           return `<div class="reminder-card ${r.passed ? "passed" : ""}" style="--ev-accent:${accent}">
         <div class="title">${escapeHtml(r.title)} · ${escapeHtml(r.start || "")}</div>
         <div class="meta">${escapeHtml(r.place_name || "")} ${escapeHtml(r.place_address || "")}</div>
-        <div class="meta at">${escapeHtml(r.at_text || "@" + (r.member_name || ""))} · 提前 ${r.advance_minutes} 分钟</div>
+        <div class="meta at">提醒 ${escapeHtml(r.member_name || r.at_text || "")} · 提前 ${r.advance_minutes} 分钟</div>
         <div class="meta">${escapeHtml(r.notes || "")}</div>
       </div>`;
         })
         .join("")
-    : `<div class="empty-soft">今日暂无提醒<br/><span>对话里说明 @谁 后会显示在这里</span></div>`;
-
-  $("#schedule-json").value = JSON.stringify(data.schedule, null, 2);
+    : `<div class="empty-soft">今日暂无提醒<br/><span>对话里说行程后，会自动出现在这里</span></div>`;
 }
-
-$("#save-schedule-btn").addEventListener("click", async () => {
-  const msg = $("#schedule-msg");
-  try {
-    const schedule = JSON.parse($("#schedule-json").value);
-    await api("/api/schedule", { method: "PUT", body: JSON.stringify({ schedule }) });
-    msg.textContent = "已保存";
-    await refreshBoard();
-  } catch (err) {
-    msg.textContent = err.message || "保存失败";
-  }
-});
 
 $("#composer").addEventListener("submit", async (e) => {
   e.preventDefault();

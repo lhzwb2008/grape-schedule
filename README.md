@@ -27,7 +27,7 @@
 3. **双模型路由**：
    - 默认：百炼 **DeepSeek V4 Flash**（`deepseek-v4-flash`）+ 日程 function calling
    - 困难任务：Cursor Cloud Agents **Grok 4.5**（`grok-4.5`）
-4. **提醒必须 @ 到人**：每条行程的 `reminders` 指向具体成员（小葡萄/爸爸/妈妈/奶奶），不能只写笼统「家长/孩子」。
+4. **提醒对象自动选定**：用户只需说行程；管家按角色决定提醒谁（孩子/接送家长等）并写入 `reminders`。用户不必在对话里写 `@`。
 
 ### 1.3 非目标（当前阶段不做）
 
@@ -65,7 +65,7 @@ grape-schedule/
 
 ### 2.3 统一存储与写库规则
 
-- **唯一数据源**：`data/app_store.json`。
+- **唯一数据源**：服务器本地文件 `data/app_store.json`（不接外部数据库/云存储）。
 - 家长在对话中告知行程时，DeepSeek 必须调用工具落库。
 - 禁止编造与「示例」地址；库空时只能说未录入。
 - 会话在 `data/sessions/`。

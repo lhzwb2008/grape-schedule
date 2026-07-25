@@ -1,4 +1,4 @@
-"""日程读写工具：供大模型 function calling 真正落库。提醒必须 @ 到具体成员。"""
+"""日程读写工具：供大模型 function calling 真正落库。提醒对象由模型按角色自动选定。"""
 
 from __future__ import annotations
 
@@ -108,7 +108,7 @@ def normalize_reminders(raw: Any) -> list[dict[str, Any]]:
             out.append({"member_id": mid, "minutes_before": minutes})
 
     if not out:
-        raise ValueError("提醒必须 @ 到具体的人（如小葡萄、爸爸、妈妈、奶奶），不能为空")
+        raise ValueError("提醒对象不能为空：请按角色选择具体成员（小葡萄/爸爸/妈妈/奶奶）")
     return out
 
 
@@ -200,9 +200,9 @@ TOOLS_PARENT: list[dict[str, Any]] = [
         "function": {
             "name": "upsert_weekly_event",
             "description": (
-                "新增或更新每周重复日程。家长告知新行程时必须调用此工具落库。"
-                "reminders 必填：每项含 member_id（xiaoputao/dad/mom/grandma 或中文名）与 minutes_before。"
-                "例如钢琴课需同时 @小葡萄 与接送家长。"
+                "新增或更新每周重复日程。家长用自然语言告知行程时必须调用此工具落库。"
+                "reminders 必填：由你根据角色自动选择需要知情的人（用户不会在对话里写@）。"
+                "例如钢琴课：小葡萄 + 实际接送的家长；提前分钟数可按路程自行估算。"
             ),
             "parameters": {
                 "type": "object",
@@ -215,7 +215,7 @@ TOOLS_PARENT: list[dict[str, Any]] = [
                     "place_id": {"type": "string"},
                     "reminders": {
                         "type": "array",
-                        "description": "必须 @ 到人，如 [{member_id:'xiaoputao',minutes_before:20},{member_id:'mom',minutes_before:55}]",
+                        "description": "由你按角色自动选择知情对象，如 [{member_id:'xiaoputao',minutes_before:20},{member_id:'mom',minutes_before:55}]",
                         "items": {
                             "type": "object",
                             "properties": {
@@ -247,7 +247,7 @@ TOOLS_PARENT: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "upsert_one_off_event",
-            "description": "新增或更新单次日程。reminders 必填且必须 @ 到具体成员。",
+            "description": "新增或更新单次日程。reminders 必填，由你按角色自动选择知情对象。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -340,16 +340,12 @@ def execute_tool(name: str, args: dict[str, Any] | None, *, by: str) -> dict[str
                     "lat": args.get("lat"),
                     "lng": args.get("lng"),
                 }
-                places = sch.get("places") or []
-                found = False
-                for p in places:
-                    if p.get("id") == "home":
-                        p.update({"name": home_name, "address": address, "notes": p.get("notes") or ""})
-                        found = True
-                        break
-                if not found:
-                    places.append({"id": "home", "name": home_name, "address": address, "notes": ""})
-                sch["places"] = places
+                # 家只存在 home 字段，避免 places 里再塞一条造成重复
+                sch["places"] = [
+                    p
+                    for p in (sch.get("places") or [])
+                    if p.get("id") != "home" and (p.get("name") or "") not in (home_name, "家")
+                ]
 
             store.update_store(_mut, by=by, action="set_home")
             return _ok(store.get_schedule()["home"])
@@ -362,6 +358,15 @@ def execute_tool(name: str, args: dict[str, Any] | None, *, by: str) -> dict[str
             if address and ("示例" in address or "example" in address.lower()):
                 return _err("地址无效：禁止示例地址")
             pid = str(args.get("id") or "").strip() or _slug(place_name)
+            # 「家」走 set_home，避免与 home 重复
+            if pid == "home" or place_name in ("家", "家里", "home"):
+                if not address:
+                    return _err("录入家地址时请提供真实住址")
+                return execute_tool(
+                    "set_home",
+                    {"address": address, "name": "家", "lat": args.get("lat"), "lng": args.get("lng")},
+                    by=by,
+                )
 
             def _mut(data: dict[str, Any]) -> None:
                 places = data["schedule"].setdefault("places", [])

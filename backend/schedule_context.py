@@ -150,7 +150,7 @@ def build_schedule_context(member: dict[str, Any], schedule: dict[str, Any] | No
         "【今日行程】",
     ]
     if not items:
-        lines.append("- （库中无今日行程；有行程请家长告知并写入，提醒必须 @ 到人）")
+        lines.append("- （库中无今日行程；有行程请家长告知并写入，提醒对象由管家按角色自动选定）")
     else:
         for ev in items:
             addr = ev.get("place_address") or ""
@@ -185,7 +185,8 @@ def build_schedule_context(member: dict[str, Any], schedule: dict[str, Any] | No
     lines.append(f"【库存量】周程 {len(weekly)} 条，单次 {len(one_off)} 条，地点 {len(places)} 个")
     if not weekly and not one_off:
         lines.append("【重要】当前没有任何已保存行程。禁止臆造安排。")
-    lines.append("【硬性】每条行程的提醒必须 @ 到具体成员，不能只写「家长/孩子」笼统角色。")
+    lines.append("【硬性】每条行程须指定具体提醒成员（由管家按角色自动选择），用户无需在对话里写@。")
+    lines.append("【存储】仅本机 data/app_store.json，无外部数据库。")
 
     return "\n".join(lines)
 

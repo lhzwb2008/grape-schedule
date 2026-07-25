@@ -49,12 +49,6 @@
           <div class="week-legend" id="week-legend" aria-hidden="true"></div>
         </div>
         <div id="week-calendar" class="week-cal" role="list"></div>
-        <details class="raw-edit">
-          <summary>高级：编辑日程 JSON</summary>
-          <textarea id="schedule-json" rows="12" spellcheck="false"></textarea>
-          <button type="button" class="btn-primary tap" id="save-schedule-btn">保存日程</button>
-          <p id="schedule-msg" class="hint"></p>
-        </details>
       </section>
 
       <aside class="panel remind-panel">
@@ -73,16 +67,16 @@
 
       <section class="panel chat-panel">
         <h3>家长对话</h3>
-        <p class="muted chat-hint">录入行程时请说明提醒谁，例如「@小葡萄 提前 20 分，@妈妈 提前 55 分」</p>
+        <p class="muted chat-hint">直接说行程就行，例如「每周三 16:00 雅马哈钢琴课，妈妈接」。管家会自动决定提醒谁。</p>
         <div class="messages compact" id="messages"></div>
         <form class="composer" id="composer">
-          <textarea id="input" rows="2" placeholder="问行程、接送、提醒谁（@小葡萄 @妈妈）…"></textarea>
+          <textarea id="input" rows="2" placeholder="说行程、地点、接送…（不用自己写@）"></textarea>
           <button type="submit" class="btn-send tap" id="send-btn">发送</button>
         </form>
       </section>
     </div>
   </section>
 
-  <script src="/static/parent.js?v=5"></script>
+  <script src="/static/parent.js?v=6"></script>
 </body>
 </html>

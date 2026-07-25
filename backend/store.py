@@ -25,7 +25,7 @@ EMPTY_SCHEDULE: dict[str, Any] = {
     "one_off": [],
     "reminder_rules": {
         "child_tone": "亲切、简短、鼓励",
-        "parent_tone": "清晰、可执行，包含地点、出发时间、接送建议，并写明 @谁",
+        "parent_tone": "清晰、可执行，包含地点、出发时间、接送建议，并说明提醒谁",
         "default_advance_minutes": 30,
     },
 }
@@ -51,11 +51,31 @@ def ensure_store() -> None:
     STORE_PATH.write_text(json.dumps(_default_store(), ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _normalize_schedule(sch: dict[str, Any]) -> dict[str, Any]:
+    """家只保留在 home；去掉 places 里重复的「家」。"""
+    if not isinstance(sch, dict):
+        return sch
+    home = sch.get("home") if isinstance(sch.get("home"), dict) else {}
+    home_name = (home.get("name") or "家").strip() or "家"
+    places = []
+    for p in sch.get("places") or []:
+        if not isinstance(p, dict):
+            continue
+        if p.get("id") == "home":
+            continue
+        if (p.get("name") or "").strip() in (home_name, "家", "家里"):
+            continue
+        places.append(p)
+    sch["places"] = places
+    return sch
+
+
 def _read() -> dict[str, Any]:
     ensure_store()
     data = json.loads(STORE_PATH.read_text(encoding="utf-8"))
     if "schedule" not in data:
         data["schedule"] = json.loads(json.dumps(EMPTY_SCHEDULE))
+    data["schedule"] = _normalize_schedule(data["schedule"])
     # 清理遗留自迭代字段（功能已移除）
     data.pop("self_iterate", None)
     if "change_log" not in data:
@@ -66,6 +86,8 @@ def _read() -> dict[str, Any]:
 def _write(data: dict[str, Any]) -> dict[str, Any]:
     ensure_store()
     data.pop("self_iterate", None)
+    if isinstance(data.get("schedule"), dict):
+        data["schedule"] = _normalize_schedule(data["schedule"])
     data["updated_at"] = _now()
     STORE_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return data
