@@ -5,7 +5,7 @@
 - GitHub：https://github.com/lhzwb2008/grape-schedule
 - 线上 HTTP：http://101.201.237.149:8766/
 - 家长端：http://101.201.237.149:8766/parent
-- 语音建议 HTTPS：https://grape-schedule.101.201.237.149.sslip.io/
+- 语音 HTTPS（本项目独立域名，勿用裸 `IP.sslip.io`）：https://grape-schedule.101.201.237.149.sslip.io/
 
 > 本 README 供后续 session 接替实现：含需求、架构、已实现范围、待办与部署约定。
 

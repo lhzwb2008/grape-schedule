@@ -246,17 +246,36 @@ function isSecureForMic() {
   const host = location.hostname;
   return host === "localhost" || host === "127.0.0.1";
 }
+// 本项目专用 HTTPS 域名（与 grape-doctor 的 <ip>.sslip.io 分离）
+let publicHttpsUrl = "https://grape-schedule.101.201.237.149.sslip.io/";
+
 function httpsEntryUrl() {
   const host = location.hostname;
-  if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) return `https://${host}.sslip.io`;
-  return `https://${host}`;
+  // 已在本项目 HTTPS 域名上
+  if (host.includes("grape-schedule") && (host.endsWith("sslip.io") || host.endsWith("nip.io"))) {
+    return `https://${host}/`;
+  }
+  // 裸 IP 或其它入口：不要跳到 <ip>.sslip.io（那是家庭医生项目）
+  return publicHttpsUrl;
 }
 function refreshSecureHint() {
   if (!secureHint) return;
   if (!isSecureForMic()) {
-    secureHint.innerHTML = `语音需 HTTPS：<a href="${httpsEntryUrl()}">${httpsEntryUrl()}</a>`;
+    const url = httpsEntryUrl();
+    secureHint.innerHTML = `语音需本项目 HTTPS：<a href="${url}">${url}</a>（勿打开裸 IP 的 sslip.io）`;
     secureHint.classList.remove("hidden");
   } else secureHint.classList.add("hidden");
+}
+
+async function loadPublicHttps() {
+  try {
+    const data = await fetch("/api/health").then((r) => r.json());
+    if (data?.https_url) publicHttpsUrl = data.https_url;
+    else if (data?.https_host) publicHttpsUrl = `https://${data.https_host}/`;
+  } catch {
+    /* keep default */
+  }
+  refreshSecureHint();
 }
 
 function pickRecorderMime() {
@@ -767,6 +786,7 @@ async function sendMessage() {
 }
 
 async function init() {
+  await loadPublicHttps();
   await loadMembers();
   if (state.token && state.member) {
     try {

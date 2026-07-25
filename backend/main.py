@@ -119,13 +119,24 @@ class ScheduleUpdateBody(BaseModel):
     schedule: dict[str, Any]
 
 
+def _public_https_host() -> str:
+    host = os.environ.get("PUBLIC_HTTPS_HOST", "").strip()
+    if host:
+        return host
+    # 回退：独立子域，避免与 grape-doctor 的 <ip>.sslip.io 冲突
+    return "grape-schedule.101.201.237.149.sslip.io"
+
+
 @app.get("/api/health")
 def health():
+    https_host = _public_https_host()
     return {
         "ok": True,
         "name": "小葡萄日程提醒智能体",
         "default_model": os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash"),
         "hard_model": os.environ.get("CURSOR_MODEL_ID", "grok-4.5"),
+        "https_host": https_host,
+        "https_url": f"https://{https_host}/",
         "self_iterate": self_iterate.status(),
     }
 
