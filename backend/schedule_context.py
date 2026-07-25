@@ -123,12 +123,13 @@ def build_schedule_context(member: dict[str, Any], schedule: dict[str, Any] | No
         "【今日行程】",
     ]
     if not items:
-        lines.append("- 今日暂无预制日程")
+        lines.append("- （库中无今日行程——不是演示数据；有行程请家长在对话中告知以便写入）")
     else:
         for ev in items:
+            addr = ev.get("place_address") or ""
+            place_bit = f"@ {ev.get('place_name')}" + (f"（{addr}）" if addr else "（地址未录入）")
             lines.append(
-                f"- {ev.get('start')}-{ev.get('end')} {ev.get('title')} "
-                f"@ {ev.get('place_name')}（{ev.get('place_address') or '地址待补'}）"
+                f"- {ev.get('start')}-{ev.get('end')} {ev.get('title')} {place_bit}"
             )
             if ev.get("notes"):
                 lines.append(f"  备注：{ev['notes']}")
@@ -140,18 +141,29 @@ def build_schedule_context(member: dict[str, Any], schedule: dict[str, Any] | No
 
     lines.append("")
     lines.append("【常用地点】")
-    for p in places.values():
-        lines.append(f"- {p.get('name')}: {p.get('address') or ''} {p.get('notes') or ''}".rstrip())
+    if not places:
+        lines.append("- （尚未录入地点）")
+    else:
+        for p in places.values():
+            addr = (p.get("address") or "").strip()
+            lines.append(f"- {p.get('name')}: {addr or '地址未录入'} {p.get('notes') or ''}".rstrip())
 
     lines.append("")
     lines.append("【路程缓冲】")
     if not travels:
-        lines.append("- 暂无")
+        lines.append("- （尚未录入路程）")
     else:
         for t in travels:
             frm = places.get(t.get("from") or "", {}).get("name") or t.get("from")
             to = places.get(t.get("to") or "", {}).get("name") or t.get("to")
             lines.append(f"- {frm} → {to}: 约 {t.get('minutes')} 分钟（{t.get('mode') or '出行'}）")
+
+    weekly = schedule.get("weekly") or []
+    one_off = schedule.get("one_off") or []
+    lines.append("")
+    lines.append(f"【库存量】周程 {len(weekly)} 条，单次 {len(one_off)} 条，地点 {len(places)} 个")
+    if not weekly and not one_off:
+        lines.append("【重要】当前没有任何已保存行程。禁止臆造钢琴课/上学等安排。")
 
     rules = schedule.get("reminder_rules") or {}
     tone = rules.get("child_tone") if role == "child" else rules.get("parent_tone")

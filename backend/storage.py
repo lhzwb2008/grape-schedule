@@ -1,4 +1,4 @@
-"""本地文件存储：账户、会话、日程。"""
+"""本地文件存储：账户、会话；日程/自迭代走统一 store。"""
 
 from __future__ import annotations
 
@@ -11,14 +11,13 @@ from typing import Any
 
 import bcrypt
 
+from backend import store as app_store
+
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 USERS_DIR = DATA_DIR / "users"
 SESSIONS_DIR = DATA_DIR / "sessions"
-SCHEDULE_PATH = DATA_DIR / "schedule.json"
-SELF_ITERATE_PATH = DATA_DIR / "self_iterate.json"
 
-# role: child = 前台小葡萄；parent = 家长监管视角
 MEMBERS = [
     {"id": "xiaoputao", "name": "小葡萄", "emoji": "🍇", "color": "#6B3FA0", "role": "child"},
     {"id": "dad", "name": "爸爸", "emoji": "👨", "color": "#1F7AEC", "role": "parent"},
@@ -39,24 +38,7 @@ def ensure_dirs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     for m in MEMBERS:
         (SESSIONS_DIR / m["id"]).mkdir(parents=True, exist_ok=True)
-    if not SCHEDULE_PATH.exists():
-        SCHEDULE_PATH.write_text(
-            json.dumps(
-                {"child_name": "小葡萄", "weekly": [], "places": [], "travel_buffers": []},
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-    if not SELF_ITERATE_PATH.exists():
-        SELF_ITERATE_PATH.write_text(
-            json.dumps(
-                {"activated": False, "activated_at": None, "history": []},
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
+    app_store.ensure_store()
 
 
 def list_members(*, role: str | None = None) -> list[dict[str, Any]]:
@@ -136,26 +118,22 @@ def login(user_id: str, password: str) -> dict[str, Any]:
 
 def load_schedule() -> dict[str, Any]:
     ensure_dirs()
-    return json.loads(SCHEDULE_PATH.read_text(encoding="utf-8"))
+    return app_store.get_schedule()
 
 
-def save_schedule(data: dict[str, Any]) -> dict[str, Any]:
+def save_schedule(data: dict[str, Any], *, by: str = "api") -> dict[str, Any]:
     ensure_dirs()
-    with _lock:
-        SCHEDULE_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    return data
+    return app_store.save_schedule(data, by=by)
 
 
 def load_self_iterate() -> dict[str, Any]:
     ensure_dirs()
-    return json.loads(SELF_ITERATE_PATH.read_text(encoding="utf-8"))
+    return app_store.get_self_iterate()
 
 
-def save_self_iterate(data: dict[str, Any]) -> dict[str, Any]:
+def save_self_iterate(data: dict[str, Any], *, by: str = "api") -> dict[str, Any]:
     ensure_dirs()
-    with _lock:
-        SELF_ITERATE_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    return data
+    return app_store.save_self_iterate(data, by=by)
 
 
 def list_sessions(user_id: str) -> list[dict[str, Any]]:

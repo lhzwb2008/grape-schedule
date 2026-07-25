@@ -176,7 +176,7 @@ def put_schedule(body: ScheduleUpdateBody, authorization: str | None = Header(de
     _require_parent(user_id)
     if not isinstance(body.schedule, dict):
         raise HTTPException(400, "schedule 必须是对象")
-    saved = storage.save_schedule(body.schedule)
+    saved = storage.save_schedule(body.schedule, by=user_id)
     return format_schedule_for_api(saved)
 
 
@@ -372,6 +372,7 @@ async def chat(
                     "provider": result.get("provider"),
                     "model": result.get("model"),
                     "difficulty": result.get("difficulty"),
+                    "schedule_updated": True,
                 }
             )
         except Exception as e:  # noqa: BLE001

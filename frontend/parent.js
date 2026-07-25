@@ -156,7 +156,7 @@ async function ensureSession() {
   });
   state.currentId = created.session.id;
   messagesEl.innerHTML = "";
-  appendBubble("assistant", "你好，我是小葡萄家庭日程管家。可以问今日接送、钢琴课出发时间，或让我帮你核对路程缓冲。");
+  appendBubble("assistant", "你好，我是小葡萄家庭日程管家。请直接告诉我真实行程（时间、地点、路程），我会写入统一存储；当前若为空，不会使用任何演示数据。");
 }
 
 async function refreshBoard() {
@@ -174,20 +174,22 @@ async function refreshBoard() {
       </div>`
         )
         .join("")
-    : `<div class="muted">今日暂无家长提醒项</div>`;
+    : `<div class="muted">今日暂无已录入提醒（请在下方对话告知真实行程，系统会写入统一存储）</div>`;
 
   const week = $("#week-list");
   const weekly = data.schedule?.weekly || [];
-  week.innerHTML = weekly
-    .map(
-      (ev) => `<div class="week-item">
+  week.innerHTML = weekly.length
+    ? weekly
+        .map(
+          (ev) => `<div class="week-item">
       <strong>${escapeHtml(ev.title)}</strong>
       <div class="meta">${(ev.days || []).join("、")} ${ev.start}-${ev.end} @ ${escapeHtml(ev.place_id || "")}</div>
       <div class="meta">孩子提前${ev.remind_child_minutes}分 / 家长提前${ev.remind_parent_minutes}分</div>
       <div class="meta">${escapeHtml(ev.notes || "")}</div>
     </div>`
-    )
-    .join("");
+        )
+        .join("")
+    : `<div class="muted">周程为空——尚未录入任何真实日程</div>`;
 
   $("#schedule-json").value = JSON.stringify(data.schedule, null, 2);
 }
@@ -297,6 +299,7 @@ $("#composer").addEventListener("submit", async (e) => {
         } else if (payload.type === "done") {
           finalText = payload.text || finalText;
           bubble.innerHTML = `<div class="md">${renderMarkdown(finalText)}</div>`;
+          await refreshBoard();
         } else if (payload.type === "error") {
           bubble.textContent = `抱歉：${payload.message}`;
         }

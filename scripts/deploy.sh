@@ -28,7 +28,7 @@ echo "==> 同步代码到 ${REMOTE_DIR}…"
   --exclude '__pycache__' \
   --exclude 'data/users/' \
   --exclude 'data/sessions/' \
-  --exclude 'data/self_iterate.json' \
+  --exclude 'data/app_store.json' \
   --exclude '.git' \
   --exclude '*.pyc' \
   --exclude '.DS_Store' \
@@ -44,7 +44,38 @@ python3 -m venv .venv
 . .venv/bin/activate
 pip install -q -r requirements.txt
 mkdir -p data/users data/sessions
-# 首次部署保留仓库内预制 schedule.json；不覆盖已有用户数据
+# 统一存储：若不存在则写入空真实结构（无演示数据）；已有文件不覆盖
+if [[ ! -f data/app_store.json ]]; then
+  cat > data/app_store.json <<'STORE'
+{
+  "version": 1,
+  "updated_at": null,
+  "schedule": {
+    "child_name": "小葡萄",
+    "timezone": "Asia/Shanghai",
+    "home": {"name": "家", "address": "", "lat": null, "lng": null},
+    "places": [],
+    "travel_buffers": [],
+    "weekly": [],
+    "one_off": [],
+    "reminder_rules": {
+      "child_tone": "亲切、简短、鼓励",
+      "parent_tone": "清晰、可执行，包含地点、出发时间、接送建议",
+      "default_advance_minutes": 30
+    }
+  },
+  "self_iterate": {
+    "activated": false,
+    "activated_at": null,
+    "activated_by": null,
+    "history": []
+  },
+  "change_log": []
+}
+STORE
+fi
+# 清理遗留 mock 文件
+rm -f data/schedule.json data/self_iterate.json
 
 cat > /etc/systemd/system/grape-schedule.service <<UNIT
 [Unit]

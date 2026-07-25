@@ -1,11 +1,11 @@
-"""按任务难度路由模型：默认 DeepSeek，困难/自迭代走 Cursor Grok。"""
+"""按任务难度路由模型：默认 DeepSeek（带日程工具），困难/自迭代走 Cursor Grok。"""
 
 from __future__ import annotations
 
 import re
 from typing import Any, Callable, Literal
 
-from backend import cursor_client, deepseek_client
+from backend import cursor_client, deepseek_client, schedule_tools
 from backend.schedule_context import build_schedule_context
 
 Provider = Literal["deepseek", "cursor"]
@@ -44,21 +44,25 @@ def build_system_prompt(member: dict[str, Any], schedule_ctx: str) -> str:
         persona = (
             "你是「小葡萄的日程小助手」，专门陪伴小朋友小葡萄。\n"
             "用简短、温暖、好懂的中文说话，可以适当鼓励。\n"
-            "帮助她记住今天要做什么、什么时候出发、在哪里。\n"
-            "不要说吓人的话；涉及安全时提醒找爸爸妈妈或奶奶。"
+            "只能根据已持久化的真实日程回答；库里没有的信息不要编造，可以说「还没记进日历，让爸爸妈妈告诉我」。\n"
+            "需要时先调用 get_schedule 再回答。"
         )
     else:
         persona = (
-            "你是「小葡萄家庭日程管家」，面向家长（爸爸/妈妈/奶奶）做监管与提醒。\n"
-            "回复要清晰可执行：时间、地点、路程、谁接送、提前多久出发。\n"
-            "钢琴课等关键事项要同时考虑孩子提醒与家长出行缓冲。"
+            "你是「小葡萄家庭日程管家」，面向家长（爸爸/妈妈/奶奶）。\n"
+            "【硬性规则】\n"
+            "1. 禁止编造、禁止使用「示例/假设」地址或行程；只使用工具读写后的真实数据。\n"
+            "2. 家长告知任何新的/变更的地点、路程、周程、单次安排时，必须立刻调用对应工具写入统一存储，"
+            "不能只口头确认。\n"
+            "3. 信息不全时：先把已确认部分落库，再明确追问缺的地址/时间/路程分钟数。\n"
+            "4. 回答前若不确定库内状态，先 get_schedule。\n"
+            "5. 写库成功后，用简洁中文复述已保存内容（时间、地点、提醒）。"
         )
     return (
         f"{persona}\n"
         f"当前用户：{name}\n\n"
-        f"以下是最新日程上下文（每次对话都会刷新，请以此为准）：\n"
-        f"{schedule_ctx}\n\n"
-        "回答时优先依据上述日程；若信息不足，明确说明并建议在家长端补充地点/路程。"
+        f"以下是最新日程快照：\n"
+        f"{schedule_ctx}\n"
     )
 
 
@@ -66,11 +70,10 @@ def build_messages(
     member: dict[str, Any],
     history: list[dict[str, str]],
     user_message: str,
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     schedule_ctx = build_schedule_context(member)
     system = build_system_prompt(member, schedule_ctx)
-    messages: list[dict[str, str]] = [{"role": "system", "content": system}]
-    # 只带最近若干轮，避免过长
+    messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
     trimmed = history[-12:] if history else []
     for m in trimmed:
         role = m.get("role")
@@ -91,25 +94,41 @@ def run_chat(
     on_delta: Callable[[str], None] | None = None,
     on_status: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
-    """执行一轮对话，返回 {text, provider, model, difficulty, agent_id?}。"""
     difficulty = classify_difficulty(user_message, force=force_difficulty)
     provider = provider_for(difficulty)
+    user_id = str(member.get("id") or "unknown")
+    role = str(member.get("role") or "child")
 
     if provider == "deepseek":
         model = deepseek_client.default_model()
         if on_status:
-            on_status(f"使用 DeepSeek（{model}）思考中…")
+            on_status(f"使用 DeepSeek（{model}）…")
         messages = build_messages(member, history, user_message)
-        text = deepseek_client.chat_stream(messages, model=model, on_delta=on_delta)
+        tools = schedule_tools.tools_for_role(role)
+
+        def _exec(name: str, args: dict[str, Any]) -> dict[str, Any]:
+            # 孩子只读
+            if role != "parent" and name != "get_schedule":
+                return {"ok": False, "error": "小朋友不能修改日程，请让家长在家长端更新"}
+            return schedule_tools.execute_tool(name, args, by=user_id)
+
+        text = deepseek_client.chat_stream(
+            messages,
+            model=model,
+            on_delta=on_delta,
+            tools=tools,
+            tool_executor=_exec,
+            on_status=on_status,
+        )
         return {
             "text": text,
             "provider": "deepseek",
             "model": model,
             "difficulty": difficulty,
             "agent_id": None,
+            "schedule_updated": True,
         }
 
-    # Cursor Grok：困难任务 / 自迭代
     model = cursor_client.model_id()
     schedule_ctx = build_schedule_context(member)
     system = build_system_prompt(member, schedule_ctx)
@@ -117,7 +136,7 @@ def run_chat(
         f"{system}\n\n"
         f"【历史摘要】共 {len(history)} 条消息\n"
         f"【用户问题】\n{user_message.strip()}\n\n"
-        "请直接给出对用户的中文回复（不要只写改代码计划，除非用户明确要求改仓库）。"
+        "请直接给出对用户的中文回复。日程写入请提示用户在家长端用对话落库（本路径不直接写库）。"
     )
     if difficulty == "self_iterate":
         prompt = (

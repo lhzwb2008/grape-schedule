@@ -46,22 +46,18 @@
 ```
 grape-schedule/
   backend/
-    main.py              # FastAPI：登录、会话、chat SSE、ASR/TTS、日程、自迭代
-    storage.py           # 成员/会话/日程/自迭代状态（本地 JSON）
-    schedule_context.py  # 日程 → 今日行程/提醒/chat 上下文文本
-    deepseek_client.py   # 百炼 OpenAI 兼容流式聊天
-    cursor_client.py     # Cursor Cloud Agents
-    model_router.py      # 难度分类 + 模型选择 + system prompt
-    dashscope_voice.py   # ASR / TTS（自 grape-doctor-family 迁移）
-    self_iterate.py      # 深度激活门禁
-  frontend/
-    index.html / app.js  # 小葡萄前台（默认按住说话）
-    parent.html / parent.js
-    styles.css
-  data/schedule.json     # 预制日程（地点、路程、周程）
-  scripts/run.sh / deploy.sh
-  .env.example
+    store.py             # 统一持久化：data/app_store.json（日程+自迭代+变更日志）
+    schedule_tools.py    # 大模型 function calling → 真正写库
+    ...
+  data/app_store.json    # 唯一业务数据源（部署时不覆盖服务器已有文件）
 ```
+
+### 2.2 统一存储与写库规则
+
+- **唯一数据源**：`data/app_store.json`（不再使用演示用 `schedule.json`）。
+- 家长在对话中告知行程时，DeepSeek 必须调用工具（`upsert_weekly_event` / `upsert_place` / `set_home` 等）落库。
+- 禁止编造与「示例」地址；库空时只能说未录入，不能臆造钢琴课等。
+- 账户会话仍在 `data/users/`、`data/sessions/`；与日程同属服务器本地持久化。
 
 ### 2.2 账户与角色
 
