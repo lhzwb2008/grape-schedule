@@ -256,14 +256,16 @@ def asr(body: AsrBody, authorization: str | None = Header(default=None)):
     except Exception as e:  # noqa: BLE001
         raise HTTPException(400, "音频解码失败") from e
     mime = (body.mime or "audio/webm").split(";")[0].strip() or "audio/webm"
+    t0 = time.perf_counter()
     try:
         text = asr_recognize(raw, mime)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"语音识别失败：{e}") from e
-    print(f"[asr] mime={mime} bytes={len(raw)} text={text!r}", flush=True)
-    return {"text": text}
+    ms = int((time.perf_counter() - t0) * 1000)
+    print(f"[asr] mime={mime} bytes={len(raw)} ms={ms} text={text!r}", flush=True)
+    return {"text": text, "asr_ms": ms}
 
 
 @app.post("/api/tts")

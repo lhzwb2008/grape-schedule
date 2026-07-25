@@ -141,7 +141,6 @@ function setBubbleContent(el, text, { markdown = false, streaming = false } = {}
   if (markdown && el.classList.contains("assistant")) el.innerHTML = `<div class="md">${renderMarkdown(text)}</div>`;
   else el.textContent = text;
   el.classList.toggle("streaming", !!streaming);
-  if (el.classList.contains("assistant") && !streaming && text && state.autoTts) prefetchFirstTts(el);
 }
 
 function appendBubble(role, content) {
@@ -187,81 +186,159 @@ async function unlockAudioPlayback() {
 function stripTextForSpeech(text) {
   return String(text || "").replace(/```[\s\S]*?```/g, " ").replace(/`[^`]+`/g, " ").replace(/[*_]{1,3}/g, "").replace(/\s+/g, " ").trim();
 }
-function splitSpeechSegments(text, maxChars = 72) {
-  const clean = stripTextForSpeech(text).replace(/(\d)\.(\d)/g, "$1点$2");
-  if (!clean) return [];
-  const parts = []; let buf = "";
-  for (let i = 0; i < clean.length; i++) {
-    buf += clean[i];
-    if (("。！？；!?\n".includes(clean[i]) || buf.length >= maxChars) && buf.trim()) { parts.push(buf.trim()); buf = ""; }
-  }
-  if (buf.trim()) parts.push(buf.trim());
-  return parts;
-}
+
 async function fetchTtsBlob(text) {
   const res = await fetch("/api/tts", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${state.token}` },
     body: JSON.stringify({ text }),
   });
-  if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.detail || `语音合成失败 ${res.status}`); }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `语音合成失败 ${res.status}`);
+  }
   return res.blob();
 }
+
 function playBlob(blob) {
   return new Promise((resolve, reject) => {
     if (!sharedAudio) sharedAudio = new Audio();
     const audio = sharedAudio;
     const url = URL.createObjectURL(blob);
     const finish = (err) => {
-      audio.onended = null; audio.onerror = null;
+      audio.onended = null;
+      audio.onerror = null;
       if (currentAudio === audio) currentAudio = null;
       URL.revokeObjectURL(url);
       err ? reject(err) : resolve();
     };
-    audio.pause(); audio.src = url; currentAudio = audio;
+    audio.pause();
+    audio.src = url;
+    currentAudio = audio;
     audio.onended = () => finish();
     audio.onerror = () => finish(new Error("播放失败"));
     audio.play().then(() => { audioUnlocked = true; }).catch(finish);
   });
 }
-function prefetchFirstTts(bubble) {
-  if (!state.autoTts || !bubble) return;
-  const segs = splitSpeechSegments(bubble.dataset.rawText || "");
-  const first = segs[0];
-  if (!first || bubble.dataset.ttsPrefetch === first) return;
-  bubble.dataset.ttsPrefetch = first;
-  bubble._ttsPrefetchPromise = fetchTtsBlob(first).then((blob) => {
-    bubble._ttsPrefetch = { text: first, blob }; return bubble._ttsPrefetch;
-  }).catch(() => { bubble._ttsPrefetch = null; return null; });
+
+function splitSpeechSegments(text, maxChars = 72) {
+  const clean = stripTextForSpeech(text).replace(/(\d)\.(\d)/g, "$1点$2");
+  if (!clean) return [];
+  const parts = [];
+  let buf = "";
+  for (let i = 0; i < clean.length; i++) {
+    buf += clean[i];
+    const atBreak = "。！？；!?\n".includes(clean[i]);
+    const tooLong = buf.length >= maxChars;
+    if ((atBreak || tooLong) && buf.trim()) {
+      parts.push(buf.trim());
+      buf = "";
+    }
+  }
+  if (buf.trim()) parts.push(buf.trim());
+  const merged = [];
+  for (const seg of parts) {
+    const prev = merged[merged.length - 1];
+    if (prev && prev.length < 12 && !"。！？!?.;".includes(prev.slice(-1))) {
+      merged[merged.length - 1] += seg;
+    } else {
+      merged.push(seg);
+    }
+  }
+  return merged;
 }
-async function playTts(bubble, { auto = false } = {}) {
-  const text = (bubble.dataset.rawText || "").trim();
-  if (!text || text.startsWith("抱歉") || text.startsWith("（已停止）")) return;
-  stopCurrentAudio();
-  const token = ttsPlayToken;
+
+/** 流式阶段：只取已成句的片段（丢掉末尾未完成半句） */
+function completeSpeechSegments(text) {
+  const segs = splitSpeechSegments(text);
+  if (!segs.length) return [];
+  const last = segs[segs.length - 1];
+  if (/[。！？!?；.]$/.test(last) || last.length >= 72) return segs;
+  return segs.slice(0, -1);
+}
+
+function resetStreamingTts(bubble) {
+  if (!bubble) return;
+  bubble._ttsStream = {
+    queued: 0,
+    queue: [],
+    fetchMap: new Map(),
+    pumping: false,
+    token: ttsPlayToken,
+  };
+}
+
+function feedStreamingTts(bubble, fullText, { finalize = false } = {}) {
+  if (!state.autoTts || !bubble) return;
+  if (!bubble._ttsStream || bubble._ttsStream.token !== ttsPlayToken) {
+    resetStreamingTts(bubble);
+  }
+  const st = bubble._ttsStream;
+  const segs = finalize ? splitSpeechSegments(fullText) : completeSpeechSegments(fullText);
+  while (st.queued < segs.length) {
+    const seg = segs[st.queued++];
+    st.queue.push(seg);
+    if (!st.fetchMap.has(seg)) {
+      st.fetchMap.set(
+        seg,
+        fetchTtsBlob(seg)
+          .then((blob) => blob)
+          .catch(() => null)
+      );
+    }
+  }
+  pumpStreamingTts(bubble);
+}
+
+async function pumpStreamingTts(bubble) {
+  const st = bubble._ttsStream;
+  if (!st || st.pumping) return;
+  st.pumping = true;
+  const token = st.token;
   try {
-    if (auto && !audioUnlocked) await unlockAudioPlayback();
-    const segments = splitSpeechSegments(text);
-    let nextFetch = null;
-    for (let i = 0; i < segments.length; i++) {
+    if (!audioUnlocked) await unlockAudioPlayback();
+    while (st.queue.length) {
       if (token !== ttsPlayToken) return;
-      const seg = segments[i];
-      let blob;
-      const pref = bubble._ttsPrefetch;
-      if (i === 0 && pref?.text === seg && pref.blob) blob = pref.blob;
-      else if (i === 0 && bubble._ttsPrefetchPromise && bubble.dataset.ttsPrefetch === seg) {
-        const r = await bubble._ttsPrefetchPromise; blob = r?.blob;
-      } else if (nextFetch) blob = await nextFetch;
-      else blob = await fetchTtsBlob(seg);
-      bubble._ttsPrefetch = null;
-      if (i + 1 < segments.length) nextFetch = fetchTtsBlob(segments[i + 1]);
+      const seg = st.queue.shift();
+      let blob = null;
+      const pending = st.fetchMap.get(seg);
+      if (pending) blob = await pending;
+      if (!blob && token === ttsPlayToken) blob = await fetchTtsBlob(seg);
+      // 播放本句时预取队列下一句
+      if (st.queue[0] && !st.fetchMap.has(st.queue[0])) {
+        const nxt = st.queue[0];
+        st.fetchMap.set(
+          nxt,
+          fetchTtsBlob(nxt)
+            .then((b) => b)
+            .catch(() => null)
+        );
+      }
       if (token !== ttsPlayToken) return;
       if (blob) await playBlob(blob);
     }
-  } catch (err) { if (!auto) console.warn(err); }
-  finally { updateSendState(); }
+  } catch (err) {
+    console.warn("[tts] stream", err);
+  } finally {
+    st.pumping = false;
+    if (st.queue.length && token === ttsPlayToken) pumpStreamingTts(bubble);
+  }
 }
-function maybeAutoPlayTts(bubble) { if (state.autoTts && bubble) playTts(bubble, { auto: true }); }
+
+
+function prefetchFirstTts(bubble) {
+  if (!bubble) return;
+  feedStreamingTts(bubble, bubble.dataset.rawText || "");
+}
+async function playTts(bubble, { auto = false } = {}) {
+  if (!bubble) return;
+  feedStreamingTts(bubble, bubble.dataset.rawText || "", { finalize: true });
+}
+function maybeAutoPlayTts(bubble) {
+  if (!state.autoTts || !bubble) return;
+  feedStreamingTts(bubble, bubble.dataset.rawText || "", { finalize: true });
+}
+
 function syncAutoTtsButton() {
   if (!autoTtsBtn) return;
   autoTtsBtn.classList.toggle("on", state.autoTts);
@@ -396,68 +473,6 @@ function isWeakAsrText(text) {
   const t = String(text || "").replace(/[。．\.！!？?\s]/g, "").trim();
   return !t || /^(嗯|恩|啊|哦|呃|唔|额|嗯嗯|啊啊)$/.test(t);
 }
-function voiceWsUrl() {
-  const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${location.host}/api/voice/ws?token=${encodeURIComponent(state.token)}`;
-}
-function b64FromBytes(bytes) {
-  let bin = ""; const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
-  return btoa(bin);
-}
-function downsampleTo16k(float32, fromRate) {
-  if (fromRate === 16000) return float32;
-  const ratio = fromRate / 16000;
-  const newLen = Math.floor(float32.length / ratio);
-  const result = new Float32Array(newLen);
-  for (let i = 0; i < newLen; i++) result[i] = float32[Math.floor(i * ratio)] || 0;
-  return result;
-}
-function floatTo16BitPCM(float32) {
-  const buf = new Int16Array(float32.length);
-  for (let i = 0; i < float32.length; i++) {
-    const s = Math.max(-1, Math.min(1, float32[i]));
-    buf[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-  }
-  return buf;
-}
-async function transcribeWithOmni(floatChunks, sampleRate) {
-  return new Promise((resolve, reject) => {
-    let ws; let settled = false;
-    const done = (err, text) => {
-      if (settled) return; settled = true;
-      try { ws?.close(); } catch {}
-      err ? reject(err) : resolve(text || "");
-    };
-    const timer = setTimeout(() => done(new Error("Omni 转写超时")), 12000);
-    try {
-      ws = new WebSocket(voiceWsUrl());
-      ws.onerror = () => { clearTimeout(timer); done(new Error("Omni 连接失败")); };
-      ws.onmessage = (ev) => {
-        let msg; try { msg = JSON.parse(ev.data); } catch { return; }
-        const t = msg?.type;
-        if (t === "client.error") { clearTimeout(timer); done(new Error(msg.message || "Omni 错误")); return; }
-        if (t === "client.status" && msg.status === "ready") {
-          for (const chunk of floatChunks) {
-            const down = downsampleTo16k(chunk, sampleRate);
-            const pcm = floatTo16BitPCM(down);
-            ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: b64FromBytes(new Uint8Array(pcm.buffer)) }));
-          }
-          ws.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
-          ws.send(JSON.stringify({ type: "response.create" }));
-          return;
-        }
-        if (t === "conversation.item.input_audio_transcription.completed" || t === "response.audio_transcript.done") {
-          clearTimeout(timer); done(null, (msg.transcript || msg.text || "").trim()); return;
-        }
-        if (t === "response.done" || t === "response.completed") {
-          const text = msg.response?.output_text || msg.transcript || "";
-          if (text) { clearTimeout(timer); done(null, String(text).trim()); }
-        }
-      };
-    } catch (e) { clearTimeout(timer); done(e); }
-  });
-}
 async function beginCapture(session) {
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
@@ -500,22 +515,31 @@ async function finishCapture({ cancel = false } = {}) {
   if (voiceHint) voiceHint.textContent = "正在识别…";
   if (holdBtn) holdBtn.textContent = "识别中…";
   try {
-    let text = "";
     const blob = encodeWavSamples(samples, sampleRate);
     const dataUrl = await blobToBase64(blob);
+    const t0 = performance.now();
     const data = await api("/api/asr", {
       method: "POST",
       body: JSON.stringify({ audio: dataUrl, mime: "audio/wav" }),
     });
-    text = (data.text || "").trim();
+    console.debug("[asr] client_ms", Math.round(performance.now() - t0), "text", data.text);
+    const text = (data.text || "").trim();
     if (!text || isWeakAsrText(text)) {
       alert(text ? `只听清了「${text}」，请靠近麦克风、说完整再试` : "没有听清，请再说一次");
       return;
     }
-    inputEl.value = text; updateSendState(); await sendMessage();
-  } catch (err) { alert(err.message || "语音识别失败"); }
-  finally {
-    state.asrBusy = false; setRecordingUi(false);
+    inputEl.value = text;
+    state.asrBusy = false;
+    setRecordingUi(false);
+    voiceOverlay?.classList.add("hidden");
+    if (holdBtn) holdBtn.textContent = "按住 说话";
+    updateSendState();
+    await sendMessage();
+  } catch (err) {
+    alert(err.message || "语音识别失败");
+  } finally {
+    state.asrBusy = false;
+    setRecordingUi(false);
     voiceOverlay?.classList.add("hidden");
     if (holdBtn) holdBtn.textContent = "按住 说话";
     updateSendState();
@@ -766,6 +790,7 @@ async function sendMessage() {
   appendBubble("user", text);
   const bubble = appendBubble("assistant", "思考中…");
   setBubbleContent(bubble, "思考中…", { streaming: true });
+  if (state.autoTts) resetStreamingTts(bubble);
   let finalText = "";
   let gotDelta = false;
   try {
@@ -799,10 +824,11 @@ async function sendMessage() {
           if (payload.text.startsWith(finalText) && payload.text.length >= finalText.length) finalText = payload.text;
           else finalText += payload.text;
           setBubbleContent(bubble, finalText, { markdown: true, streaming: true });
-          if (state.autoTts) prefetchFirstTts(bubble);
+          if (state.autoTts) feedStreamingTts(bubble, finalText);
         } else if (payload.type === "done") {
           finalText = payload.text || finalText;
           setBubbleContent(bubble, finalText, { markdown: true, streaming: false });
+          if (state.autoTts) feedStreamingTts(bubble, finalText, { finalize: true });
           await refreshBoard();
         } else if (payload.type === "error") {
           setBubbleContent(bubble, `抱歉：${payload.message}`, { streaming: false });
@@ -811,7 +837,7 @@ async function sendMessage() {
     }
     if (finalText) {
       setBubbleContent(bubble, finalText, { markdown: true, streaming: false });
-      maybeAutoPlayTts(bubble);
+      if (state.autoTts) feedStreamingTts(bubble, finalText, { finalize: true });
       await refreshBoard();
     }
   } catch (err) {

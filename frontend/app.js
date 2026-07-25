@@ -101,11 +101,8 @@ function setBubbleContent(el, text, { markdown = false, streaming = false } = {}
     el.textContent = text;
   }
   el.classList.toggle("streaming", !!streaming);
-  // 不再挂单条语音按钮；仅顶部总开关自动播报
-  if (el.classList.contains("assistant") && !streaming && text && state.autoTts) {
-    prefetchFirstTts(el);
-  }
 }
+
 
 function stopCurrentAudio() {
   ttsPlayToken += 1;
@@ -151,23 +148,6 @@ function stripTextForSpeech(text) {
     .trim();
 }
 
-function splitSpeechSegments(text, maxChars = 72) {
-  const clean = stripTextForSpeech(text).replace(/(\d)\.(\d)/g, "$1点$2");
-  if (!clean) return [];
-  const parts = [];
-  let buf = "";
-  for (let i = 0; i < clean.length; i++) {
-    buf += clean[i];
-    const atBreak = "。！？；!?\n".includes(clean[i]);
-    if ((atBreak || buf.length >= maxChars) && buf.trim()) {
-      parts.push(buf.trim());
-      buf = "";
-    }
-  }
-  if (buf.trim()) parts.push(buf.trim());
-  return parts;
-}
-
 async function fetchTtsBlob(text) {
   const res = await fetch("/api/tts", {
     method: "POST",
@@ -202,69 +182,126 @@ function playBlob(blob) {
   });
 }
 
-function prefetchFirstTts(bubble) {
-  if (!state.autoTts || !bubble) return;
-  const segs = splitSpeechSegments(bubble.dataset.rawText || "");
-  const first = segs[0];
-  if (!first) return;
-  if (bubble.dataset.ttsPrefetch === first) return;
-  bubble.dataset.ttsPrefetch = first;
-  const p = fetchTtsBlob(first)
-    .then((blob) => {
-      bubble._ttsPrefetch = { text: first, blob };
-      return bubble._ttsPrefetch;
-    })
-    .catch(() => {
-      bubble._ttsPrefetch = null;
-      return null;
-    });
-  bubble._ttsPrefetchPromise = p;
+function splitSpeechSegments(text, maxChars = 72) {
+  const clean = stripTextForSpeech(text).replace(/(\d)\.(\d)/g, "$1点$2");
+  if (!clean) return [];
+  const parts = [];
+  let buf = "";
+  for (let i = 0; i < clean.length; i++) {
+    buf += clean[i];
+    const atBreak = "。！？；!?\n".includes(clean[i]);
+    const tooLong = buf.length >= maxChars;
+    if ((atBreak || tooLong) && buf.trim()) {
+      parts.push(buf.trim());
+      buf = "";
+    }
+  }
+  if (buf.trim()) parts.push(buf.trim());
+  const merged = [];
+  for (const seg of parts) {
+    const prev = merged[merged.length - 1];
+    if (prev && prev.length < 12 && !"。！？!?.;".includes(prev.slice(-1))) {
+      merged[merged.length - 1] += seg;
+    } else {
+      merged.push(seg);
+    }
+  }
+  return merged;
 }
 
-async function playTts(bubble, { auto = false } = {}) {
-  const text = (bubble.dataset.rawText || "").trim();
-  if (!text || text.startsWith("抱歉") || text.startsWith("（已停止）")) return;
-  stopCurrentAudio();
-  const token = ttsPlayToken;
+/** 流式阶段：只取已成句的片段（丢掉末尾未完成半句） */
+function completeSpeechSegments(text) {
+  const segs = splitSpeechSegments(text);
+  if (!segs.length) return [];
+  const last = segs[segs.length - 1];
+  if (/[。！？!?；.]$/.test(last) || last.length >= 72) return segs;
+  return segs.slice(0, -1);
+}
+
+function resetStreamingTts(bubble) {
+  if (!bubble) return;
+  bubble._ttsStream = {
+    queued: 0,
+    queue: [],
+    fetchMap: new Map(),
+    pumping: false,
+    token: ttsPlayToken,
+  };
+}
+
+function feedStreamingTts(bubble, fullText, { finalize = false } = {}) {
+  if (!state.autoTts || !bubble) return;
+  if (!bubble._ttsStream || bubble._ttsStream.token !== ttsPlayToken) {
+    resetStreamingTts(bubble);
+  }
+  const st = bubble._ttsStream;
+  const segs = finalize ? splitSpeechSegments(fullText) : completeSpeechSegments(fullText);
+  while (st.queued < segs.length) {
+    const seg = segs[st.queued++];
+    st.queue.push(seg);
+    if (!st.fetchMap.has(seg)) {
+      st.fetchMap.set(
+        seg,
+        fetchTtsBlob(seg)
+          .then((blob) => blob)
+          .catch(() => null)
+      );
+    }
+  }
+  pumpStreamingTts(bubble);
+}
+
+async function pumpStreamingTts(bubble) {
+  const st = bubble._ttsStream;
+  if (!st || st.pumping) return;
+  st.pumping = true;
+  const token = st.token;
   try {
-    if (auto && !audioUnlocked) await unlockAudioPlayback();
-    const segments = splitSpeechSegments(text);
-    let nextFetch = null;
-    for (let i = 0; i < segments.length; i++) {
+    if (!audioUnlocked) await unlockAudioPlayback();
+    while (st.queue.length) {
       if (token !== ttsPlayToken) return;
-      const seg = segments[i];
-      let blob;
-      const pref = bubble._ttsPrefetch;
-      if (i === 0 && pref?.text === seg && pref.blob) {
-        blob = pref.blob;
-        bubble._ttsPrefetch = null;
-      } else if (i === 0 && bubble._ttsPrefetchPromise && bubble.dataset.ttsPrefetch === seg) {
-        const r = await bubble._ttsPrefetchPromise;
-        blob = r?.blob;
-        bubble._ttsPrefetch = null;
-      } else if (nextFetch) {
-        blob = await nextFetch;
-        nextFetch = null;
-      } else {
-        blob = await fetchTtsBlob(seg);
-      }
-      if (i + 1 < segments.length) {
-        const nxt = segments[i + 1];
-        nextFetch = fetchTtsBlob(nxt);
+      const seg = st.queue.shift();
+      let blob = null;
+      const pending = st.fetchMap.get(seg);
+      if (pending) blob = await pending;
+      if (!blob && token === ttsPlayToken) blob = await fetchTtsBlob(seg);
+      // 播放本句时预取队列下一句
+      if (st.queue[0] && !st.fetchMap.has(st.queue[0])) {
+        const nxt = st.queue[0];
+        st.fetchMap.set(
+          nxt,
+          fetchTtsBlob(nxt)
+            .then((b) => b)
+            .catch(() => null)
+        );
       }
       if (token !== ttsPlayToken) return;
       if (blob) await playBlob(blob);
     }
   } catch (err) {
-    if (!auto) console.warn(err);
+    console.warn("[tts] stream", err);
   } finally {
-    updateSendState();
+    st.pumping = false;
+    if (st.queue.length && token === ttsPlayToken) pumpStreamingTts(bubble);
   }
+}
+
+
+function prefetchFirstTts(bubble) {
+  // 兼容旧调用：改为流式喂句
+  if (!bubble) return;
+  feedStreamingTts(bubble, bubble.dataset.rawText || "");
+}
+
+async function playTts(bubble, { auto = false } = {}) {
+  // 非流式兜底：整段切句播放（流式已播过的会因 token 一致继续队列）
+  if (!bubble) return;
+  feedStreamingTts(bubble, bubble.dataset.rawText || "", { finalize: true });
 }
 
 function maybeAutoPlayTts(bubble) {
   if (!state.autoTts || !bubble) return;
-  playTts(bubble, { auto: true });
+  feedStreamingTts(bubble, bubble.dataset.rawText || "", { finalize: true });
 }
 
 function syncAutoTtsButton() {
@@ -629,107 +666,6 @@ function isWeakAsrText(text) {
   return !t || /^(嗯|恩|啊|哦|呃|唔|额|嗯嗯|啊啊)$/.test(t);
 }
 
-
-function voiceWsUrl() {
-  const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${location.host}/api/voice/ws?token=${encodeURIComponent(state.token)}`;
-}
-
-function b64FromBytes(bytes) {
-  let bin = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
-  }
-  return btoa(bin);
-}
-
-function downsampleTo16k(float32, fromRate) {
-  if (fromRate === 16000) return float32;
-  const ratio = fromRate / 16000;
-  const newLen = Math.floor(float32.length / ratio);
-  const result = new Float32Array(newLen);
-  for (let i = 0; i < newLen; i++) result[i] = float32[Math.floor(i * ratio)] || 0;
-  return result;
-}
-
-function floatTo16BitPCM(float32) {
-  const buf = new Int16Array(float32.length);
-  for (let i = 0; i < float32.length; i++) {
-    const s = Math.max(-1, Math.min(1, float32[i]));
-    buf[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-  }
-  return buf;
-}
-
-/** Omni 实时转写：边说边传，松手后更快出字；失败则回退 /api/asr */
-async function transcribeWithOmni(floatChunks, sampleRate) {
-  return new Promise(async (resolve, reject) => {
-    let ws;
-    let settled = false;
-    const done = (err, text) => {
-      if (settled) return;
-      settled = true;
-      try { ws?.close(); } catch {}
-      err ? reject(err) : resolve(text || "");
-    };
-    const timer = setTimeout(() => done(new Error("Omni 转写超时")), 12000);
-    try {
-      ws = new WebSocket(voiceWsUrl());
-      ws.onerror = () => {
-        clearTimeout(timer);
-        done(new Error("Omni 连接失败"));
-      };
-      ws.onmessage = (ev) => {
-        let msg;
-        try { msg = JSON.parse(ev.data); } catch { return; }
-        const t = msg?.type;
-        if (t === "client.error") {
-          clearTimeout(timer);
-          done(new Error(msg.message || "Omni 错误"));
-          return;
-        }
-        if (t === "client.status" && msg.status === "ready") {
-          // 推送已缓存的 PCM
-          for (const chunk of floatChunks) {
-            const down = downsampleTo16k(chunk, sampleRate);
-            const pcm = floatTo16BitPCM(down);
-            ws.send(JSON.stringify({
-              type: "input_audio_buffer.append",
-              audio: b64FromBytes(new Uint8Array(pcm.buffer)),
-            }));
-          }
-          ws.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
-          ws.send(JSON.stringify({ type: "response.create" }));
-          return;
-        }
-        // 转写完成事件（兼容多种字段）
-        if (
-          t === "conversation.item.input_audio_transcription.completed" ||
-          t === "response.audio_transcript.done"
-        ) {
-          const text = (msg.transcript || msg.text || "").trim();
-          clearTimeout(timer);
-          done(null, text);
-          return;
-        }
-        if (t === "response.done" || t === "response.completed") {
-          const text =
-            msg.response?.output_text ||
-            msg.transcript ||
-            "";
-          if (text) {
-            clearTimeout(timer);
-            done(null, String(text).trim());
-          }
-        }
-      };
-    } catch (e) {
-      clearTimeout(timer);
-      done(e);
-    }
-  });
-}
 
 async function transcribeAudio(blob, mimeType) {
   state.asrBusy = true;
@@ -1203,6 +1139,7 @@ async function sendMessage() {
   const previews = pending.map((a) => ({ name: a.name, previewUrl: a.previewUrl }));
   appendBubble("user", text || "（截图）", { previews });
   const bubble = appendBubble("assistant", "正在想…", { markdown: true, streaming: true });
+  if (state.autoTts) resetStreamingTts(bubble);
   let finalText = "";
   let gotDelta = false;
   try {
@@ -1249,11 +1186,12 @@ async function sendMessage() {
             finalText = payload.text;
           } else finalText += payload.text;
           setBubbleContent(bubble, finalText, { markdown: true, streaming: true });
-          if (state.autoTts) prefetchFirstTts(bubble);
+          if (state.autoTts) feedStreamingTts(bubble, finalText);
           scrollBottom();
         } else if (payload.type === "done") {
           finalText = payload.text || finalText;
           setBubbleContent(bubble, finalText, { markdown: true, streaming: false });
+          if (state.autoTts) feedStreamingTts(bubble, finalText, { finalize: true });
           scrollBottom();
         } else if (payload.type === "error") {
           setBubbleContent(bubble, `抱歉：${payload.message}`, { streaming: false });
@@ -1264,7 +1202,7 @@ async function sendMessage() {
     if (finalText) {
       setBubbleContent(bubble, finalText, { markdown: true, streaming: false });
       scrollBottom();
-      maybeAutoPlayTts(bubble);
+      if (state.autoTts) feedStreamingTts(bubble, finalText, { finalize: true });
     }
     await refreshSessions();
     await loadTodayStrip();
