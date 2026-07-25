@@ -290,37 +290,162 @@ body.view-parent { overflow: auto; overscroll-behavior: auto; }
 }
 .btn-menu, .btn-side-close { display: none; }
 
-.parent-app { padding: 16px; max-width: 1100px; margin: 0 auto; }
+.parent-app { padding: 16px 16px 28px; max-width: 1240px; margin: 0 auto; }
 .parent-top {
   display: flex; justify-content: space-between; align-items: center;
-  margin-bottom: 16px; padding: 12px 4px;
+  margin-bottom: 14px; padding: 10px 4px;
 }
-.parent-grid {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+.parent-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.75fr) minmax(260px, 1fr);
+  grid-template-areas:
+    "week remind"
+    "chat chat";
+  gap: 14px;
+  align-items: start;
 }
+.week-panel { grid-area: week; }
+.remind-panel { grid-area: remind; }
+.chat-panel { grid-area: chat; min-height: 380px; display: flex; flex-direction: column; }
 .panel {
   background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
   padding: 16px; box-shadow: var(--shadow);
 }
-.panel h3 { margin: 0 0 8px; }
-.muted { color: var(--muted); font-size: 0.9rem; }
-.reminder-board, .week-list { display: flex; flex-direction: column; gap: 8px; }
-.reminder-card, .week-item {
+.panel-head {
+  display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;
+  margin-bottom: 12px;
+}
+.panel h3 { margin: 0 0 4px; font-size: 1.05rem; }
+.panel h4 { margin: 16px 0 8px; font-size: 0.92rem; color: var(--muted); }
+.muted { color: var(--muted); font-size: 0.88rem; }
+.chat-hint { margin: 0 0 10px; }
+
+.week-legend { display: flex; flex-wrap: wrap; gap: 8px 12px; justify-content: flex-end; }
+.leg-item {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 0.78rem; color: var(--muted); font-weight: 700;
+}
+.leg-item i {
+  width: 10px; height: 10px; border-radius: 3px; display: inline-block;
+}
+
+.week-cal {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+  min-height: 220px;
+}
+.cal-day {
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  min-height: 200px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.cal-day.today {
+  border-color: #3d7ad9;
+  box-shadow: inset 0 0 0 1px rgba(61, 122, 217, 0.25);
+  background: linear-gradient(180deg, #f3f8ff 0%, #fff 40%);
+}
+.cal-day-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.82rem;
+}
+.cal-day-head strong { font-weight: 800; }
+.cal-day-head span { color: var(--muted); font-size: 0.75rem; }
+.cal-day-body {
+  padding: 8px;
+  display: flex; flex-direction: column; gap: 8px;
+  flex: 1;
+}
+.cal-empty {
+  flex: 1; display: grid; place-items: center;
+  color: #9aa8a0; font-size: 0.78rem; font-weight: 700;
+  border: 1px dashed rgba(28, 43, 36, 0.14);
+  border-radius: 10px;
+  min-height: 72px;
+}
+.cal-ev {
+  border-radius: 10px;
+  padding: 8px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--ev-accent, var(--leaf));
+  box-shadow: 0 4px 12px rgba(40, 60, 50, 0.06);
+}
+.cal-ev-time {
+  font-size: 0.72rem; font-weight: 800; color: var(--ink);
+  display: flex; gap: 4px; align-items: baseline;
+}
+.cal-ev-time span { color: var(--muted); font-weight: 600; }
+.cal-ev-title { font-size: 0.84rem; font-weight: 800; margin-top: 2px; line-height: 1.25; }
+.cal-ev-meta, .cal-ev-at {
+  font-size: 0.72rem; color: var(--muted); margin-top: 3px; line-height: 1.3;
+}
+.cal-ev-at { color: #1f4f9c; font-weight: 700; }
+
+.reminder-board { display: flex; flex-direction: column; gap: 8px; }
+.reminder-card {
   background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 12px;
+  border-left: 3px solid var(--ev-accent, #3d7ad9);
 }
 .reminder-card.passed { opacity: 0.55; }
 .reminder-card .title { font-weight: 800; }
 .reminder-card .meta { font-size: 0.85rem; color: var(--muted); margin-top: 4px; }
-.raw-edit { margin-top: 12px; }
-.raw-edit textarea { width: 100%; margin: 8px 0; font-family: ui-monospace, monospace; font-size: 0.8rem; }
-.activate-form { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
-.activate-form input { flex: 1; min-width: 160px; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; font: inherit; }
-.iterate-status {
-  padding: 10px 12px; border-radius: 12px; background: #fff; border: 1px solid var(--line);
-  font-weight: 700;
+.reminder-card .meta.at { color: #1f4f9c; font-weight: 700; }
+.empty-soft {
+  padding: 18px 14px; text-align: center; color: var(--muted);
+  background: rgba(255,255,255,0.7); border: 1px dashed var(--line); border-radius: 14px;
+  font-weight: 700; line-height: 1.5;
 }
-.iterate-status.on { border-color: var(--leaf); color: var(--leaf); }
-.iterate-status.off { color: var(--muted); }
+.empty-soft span { font-weight: 500; font-size: 0.85rem; }
+
+.places-block { margin-top: 8px; padding-top: 4px; border-top: 1px solid var(--line); }
+.places-board { display: flex; flex-direction: column; gap: 6px; }
+.place-row {
+  display: flex; flex-direction: column; gap: 2px;
+  background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px;
+  font-size: 0.86rem;
+}
+.place-row strong { font-weight: 800; }
+.place-row span { color: var(--muted); font-size: 0.8rem; }
+.place-row.travel strong { color: #1f4f9c; }
+.travel-title {
+  margin: 6px 0 2px; font-size: 0.78rem; font-weight: 800; color: var(--muted);
+}
+
+.chat-panel .messages.compact {
+  flex: 1; min-height: 220px; max-height: 420px;
+  background: rgba(255,255,255,0.55); border-radius: 14px; border: 1px solid var(--line);
+}
+.raw-edit { margin-top: 14px; }
+.raw-edit summary {
+  cursor: pointer; font-weight: 700; color: var(--muted); font-size: 0.88rem;
+}
+.raw-edit textarea {
+  width: 100%; margin: 8px 0; font-family: ui-monospace, monospace; font-size: 0.8rem;
+  border-radius: 12px; border: 1px solid var(--line); padding: 10px;
+}
+
+@media (max-width: 980px) {
+  .parent-layout {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "week"
+      "remind"
+      "chat";
+  }
+  .week-cal {
+    grid-template-columns: repeat(7, minmax(108px, 1fr));
+    overflow-x: auto;
+    padding-bottom: 6px;
+  }
+  .cal-day { min-height: 180px; }
+}
 
 @media (max-width: 860px) {
   .chat-view { grid-template-columns: 1fr; height: 100%; height: 100dvh; }
@@ -332,7 +457,8 @@ body.view-parent { overflow: auto; overscroll-behavior: auto; }
   .sidebar.open { transform: translateX(0); }
   .sidebar-mask.show { display: block; }
   .btn-menu, .btn-side-close { display: inline-flex; }
-  .parent-grid { grid-template-columns: 1fr; }
   .messages { padding: 12px 12px 16px; }
   .bubble { max-width: 94%; }
+  .week-cal { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cal-day { min-height: 140px; }
 }

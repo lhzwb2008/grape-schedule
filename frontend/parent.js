@@ -156,49 +156,165 @@ async function ensureSession() {
   });
   state.currentId = created.session.id;
   messagesEl.innerHTML = "";
-  appendBubble("assistant", "你好，我是小葡萄家庭日程管家。请直接告诉我真实行程（时间、地点、路程），我会写入统一存储；当前若为空，不会使用任何演示数据。");
+  appendBubble("assistant", "你好，我是小葡萄家庭日程管家。请直接告诉我真实行程（时间、地点、路程），并说明提醒谁，例如 @小葡萄 和 @妈妈；我会写入统一存储。当前若为空，不会使用任何演示数据。");
+}
+
+
+const DAYS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+const MEMBER_COLORS = {
+  xiaoputao: "#6B3FA0",
+  dad: "#1F7AEC",
+  mom: "#E85D75",
+  grandma: "#D97706",
+};
+
+function memberName(members, id) {
+  return (members || []).find((m) => m.id === id)?.name || id || "?";
+}
+
+function formatReminders(reminders, members) {
+  if (!reminders?.length) return "（未 @ 任何人）";
+  return reminders
+    .map((r) => `@${memberName(members, r.member_id)}（提前${r.minutes_before}分）`)
+    .join(" ");
+}
+
+function eventAccent(ev) {
+  const mid = ev.reminders?.[0]?.member_id;
+  return MEMBER_COLORS[mid] || "#2f8f5b";
+}
+
+function thisWeekDates(isoNow) {
+  const now = isoNow ? new Date(isoNow) : new Date();
+  // Monday-based week in local time
+  const day = (now.getDay() + 6) % 7; // 0=Mon
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day);
+  return DAYS.map((label, i) => {
+    const d = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + i);
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return {
+      label,
+      date: `${yyyy}-${mm}-${dd}`,
+      short: `${d.getMonth() + 1}/${d.getDate()}`,
+      isToday: label === DAYS[(now.getDay() + 6) % 7],
+    };
+  });
+}
+
+function eventsForDay(schedule, dayLabel, dateStr) {
+  const weekly = (schedule?.weekly || []).filter((ev) => (ev.days || []).includes(dayLabel));
+  const oneOff = (schedule?.one_off || []).filter((ev) => ev.date === dateStr);
+  return [...weekly, ...oneOff].sort((a, b) => String(a.start || "").localeCompare(String(b.start || "")));
+}
+
+function renderWeekLegend(members) {
+  const el = $("#week-legend");
+  if (!el) return;
+  el.innerHTML = (members || [])
+    .map(
+      (m) =>
+        `<span class="leg-item"><i style="background:${MEMBER_COLORS[m.id] || "#888"}"></i>${escapeHtml(m.name)}</span>`
+    )
+    .join("");
+}
+
+function renderWeekCalendar(data) {
+  const schedule = data.schedule || {};
+  const members = data.members || [];
+  const cols = thisWeekDates(data.now);
+  const cal = $("#week-calendar");
+  let total = 0;
+  cal.innerHTML = cols
+    .map((col) => {
+      const events = eventsForDay(schedule, col.label, col.date);
+      total += events.length;
+      const body = events.length
+        ? events
+            .map((ev) => {
+              const at = formatReminders(ev.reminders, members);
+              const place =
+                (schedule.places || []).find((p) => p.id === ev.place_id)?.name ||
+                ev.place_id ||
+                "";
+              return `<article class="cal-ev" style="--ev-accent:${eventAccent(ev)}" role="listitem">
+            <div class="cal-ev-time">${escapeHtml(ev.start || "")}<span>${escapeHtml(ev.end || "")}</span></div>
+            <div class="cal-ev-title">${escapeHtml(ev.title || "未命名")}</div>
+            <div class="cal-ev-meta">${escapeHtml(place)}</div>
+            <div class="cal-ev-at">${escapeHtml(at)}</div>
+          </article>`;
+            })
+            .join("")
+        : `<div class="cal-empty">暂无</div>`;
+      return `<div class="cal-day ${col.isToday ? "today" : ""}" role="list">
+        <div class="cal-day-head">
+          <strong>${col.label}</strong>
+          <span>${col.short}</span>
+        </div>
+        <div class="cal-day-body">${body}</div>
+      </div>`;
+    })
+    .join("");
+  $("#week-meta").textContent = total
+    ? `本周 ${total} 条行程 · 色条表示首位被 @ 的人`
+    : "本周暂无行程——在下方对话录入后会显示在这里";
+}
+
+function renderPlaces(schedule) {
+  const el = $("#places-board");
+  const places = schedule?.places || [];
+  const home = schedule?.home;
+  const travels = schedule?.travel_buffers || [];
+  const placeName = (id) => places.find((p) => p.id === id)?.name || id;
+  const bits = [];
+  if (home?.address) {
+    bits.push(`<div class="place-row"><strong>家</strong><span>${escapeHtml(home.address)}</span></div>`);
+  } else {
+    bits.push(`<div class="place-row muted">家地址尚未录入</div>`);
+  }
+  if (places.length) {
+    for (const p of places) {
+      bits.push(
+        `<div class="place-row"><strong>${escapeHtml(p.name || p.id)}</strong><span>${escapeHtml(p.address || "地址未录")}</span></div>`
+      );
+    }
+  } else {
+    bits.push(`<div class="place-row muted">尚无其它地点</div>`);
+  }
+  if (travels.length) {
+    bits.push(`<div class="travel-title">路程</div>`);
+    for (const t of travels) {
+      bits.push(
+        `<div class="place-row travel"><strong>${escapeHtml(placeName(t.from))} → ${escapeHtml(placeName(t.to))}</strong><span>约 ${t.minutes} 分 · ${escapeHtml(t.mode || "出行")}</span></div>`
+      );
+    }
+  }
+  el.innerHTML = bits.join("");
 }
 
 async function refreshBoard() {
   const data = await api("/api/schedule");
   $("#board-meta").textContent = `${data.weekday || ""} · ${new Date(data.now).toLocaleString("zh-CN")}`;
+  renderWeekLegend(data.members);
+  renderWeekCalendar(data);
+  renderPlaces(data.schedule || {});
+
   const board = $("#reminder-board");
   const items = data.reminders || [];
   board.innerHTML = items.length
     ? items
-        .map(
-          (r) => `<div class="reminder-card ${r.passed ? "passed" : ""}">
+        .map((r) => {
+          const accent = MEMBER_COLORS[r.member_id] || "#2f8f5b";
+          return `<div class="reminder-card ${r.passed ? "passed" : ""}" style="--ev-accent:${accent}">
         <div class="title">${escapeHtml(r.title)} · ${escapeHtml(r.start || "")}</div>
         <div class="meta">${escapeHtml(r.place_name || "")} ${escapeHtml(r.place_address || "")}</div>
-        <div class="meta">${escapeHtml(r.at_text || "@" + (r.member_name || ""))} · 提前 ${r.advance_minutes} 分钟</div>
+        <div class="meta at">${escapeHtml(r.at_text || "@" + (r.member_name || ""))} · 提前 ${r.advance_minutes} 分钟</div>
         <div class="meta">${escapeHtml(r.notes || "")}</div>
-      </div>`
-        )
-        .join("")
-    : `<div class="muted">今日暂无已录入提醒（对话里请说明 @谁；系统会写入统一存储）</div>`;
-
-  const week = $("#week-list");
-  const weekly = data.schedule?.weekly || [];
-  week.innerHTML = weekly.length
-    ? weekly
-        .map((ev) => {
-          const at =
-            (ev.reminders || [])
-              .map((r) => {
-                const name =
-                  (data.members || []).find((m) => m.id === r.member_id)?.name || r.member_id;
-                return `@${name}（提前${r.minutes_before}分）`;
-              })
-              .join(" ") || "（未 @ 任何人）";
-          return `<div class="week-item">
-      <strong>${escapeHtml(ev.title)}</strong>
-      <div class="meta">${(ev.days || []).join("、")} ${ev.start}-${ev.end} @ ${escapeHtml(ev.place_id || "")}</div>
-      <div class="meta">提醒：${escapeHtml(at)}</div>
-      <div class="meta">${escapeHtml(ev.notes || "")}</div>
-    </div>`;
+      </div>`;
         })
         .join("")
-    : `<div class="muted">周程为空——尚未录入任何真实日程</div>`;
+    : `<div class="empty-soft">今日暂无提醒<br/><span>对话里说明 @谁 后会显示在这里</span></div>`;
 
   $("#schedule-json").value = JSON.stringify(data.schedule, null, 2);
 }
