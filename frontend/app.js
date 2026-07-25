@@ -582,20 +582,26 @@ async function finishCapture({ cancel = false } = {}) {
   if (voiceHint) voiceHint.textContent = "正在识别…";
   if (holdBtn) holdBtn.textContent = "识别中…";
   try {
-    let text = "";
-    // 按住说话走稳定的 /api/asr（Omni 批量回灌会卡死超时，已改回）
+    // 按住说话走 /api/asr；识别完立刻结束「识别中」，再发对话（勿把 chat 耗时算进识别）
     const blob = encodeWavSamples(samples, sampleRate);
     const dataUrl = await blobToBase64(blob);
+    const t0 = performance.now();
     const data = await api("/api/asr", {
       method: "POST",
       body: JSON.stringify({ audio: dataUrl, mime: "audio/wav" }),
     });
-    text = (data.text || "").trim();
+    console.debug("[asr] client_ms", Math.round(performance.now() - t0), "text", data.text);
+    const text = (data.text || "").trim();
     if (!text || isWeakAsrText(text)) {
       alert(text ? `只听清了「${text}」，请靠近麦克风、说完整再试` : "没有听清，请再说一次");
       return;
     }
     inputEl.value = text;
+    // 识别阶段结束
+    state.asrBusy = false;
+    setRecordingUi(false);
+    voiceOverlay?.classList.add("hidden");
+    if (holdBtn) holdBtn.textContent = "按住 说话";
     updateSendState();
     await sendMessage();
   } catch (err) {
