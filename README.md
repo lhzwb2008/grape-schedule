@@ -68,13 +68,13 @@ grape-schedule/
 - **唯一数据源**：`data/app_store.json`。
 - 家长在对话中告知行程时，DeepSeek 必须调用工具落库。
 - 禁止编造与「示例」地址；库空时只能说未录入。
-- 账户会话仍在 `data/users/`、`data/sessions/`。
+- 会话在 `data/sessions/`。
 
 ### 2.4 账户与角色
 
 - `xiaoputao`（child）→ 前台
 - `dad` / `mom` / `grandma`（parent）→ 家长端
-- 首次登录设置密码，bcrypt 存 `data/users/`；会话存 `data/sessions/{user_id}/`
+- 无密码：点选身份即可进入；会话存 `data/sessions/{user_id}/`
 
 ### 2.5 模型路由策略
 
@@ -94,7 +94,7 @@ grape-schedule/
 |---|---|---|
 | GET | `/api/health` | 健康检查 |
 | GET | `/api/members?role=child\|parent` | 成员列表 |
-| POST | `/api/login` | 登录 |
+| POST | `/api/login` | 选身份进入（无需密码，body: `{user_id}`） |
 | GET/PUT | `/api/schedule` | 读日程 / 家长写日程（含 `reminders` / `reminders_by_member`） |
 | CRUD | `/api/sessions...` | 会话 |
 | POST | `/api/sessions/{id}/chat` | SSE 流式对话 |

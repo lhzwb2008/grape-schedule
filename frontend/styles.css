@@ -105,6 +105,7 @@ body.view-parent { overflow: auto; overscroll-behavior: auto; }
 .member-name { font-weight: 700; margin-top: 4px; }
 .member-status { font-size: 0.75rem; color: var(--muted); margin-top: 2px; }
 .member-status.set { color: var(--leaf); }
+.member-status.go { color: var(--leaf); font-weight: 700; }
 
 .login-form { margin-top: 16px; display: flex; flex-direction: column; gap: 10px; }
 .selected-chip {

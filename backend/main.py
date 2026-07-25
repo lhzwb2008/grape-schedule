@@ -90,7 +90,6 @@ def _strip_b64(data: str) -> str:
 
 class LoginBody(BaseModel):
     user_id: str
-    password: str = Field(min_length=4, max_length=64)
 
 
 class AttachmentIn(BaseModel):
@@ -182,7 +181,7 @@ def members(role: str | None = None):
 @app.post("/api/login")
 def login(body: LoginBody):
     try:
-        member = storage.login(body.user_id, body.password)
+        member = storage.login(body.user_id)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     token = _make_token(body.user_id)

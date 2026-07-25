@@ -21,12 +21,7 @@ const $ = (sel) => document.querySelector(sel);
 const loginView = $("#login-view");
 const chatView = $("#chat-view");
 const memberGrid = $("#member-grid");
-const loginForm = $("#login-form");
-const passwordInput = $("#password-input");
-const passwordLabel = $("#password-label");
-const loginHint = $("#login-hint");
 const loginError = $("#login-error");
-const selectedChip = $("#selected-chip");
 const sessionList = $("#session-list");
 const messagesEl = $("#messages");
 const welcomeEl = $("#welcome");
@@ -701,6 +696,19 @@ function fmtTime(iso) {
   return d.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
+async function enterAs(member) {
+  const data = await api("/api/login", {
+    method: "POST",
+    body: JSON.stringify({ user_id: member.id }),
+  });
+  state.token = data.token;
+  state.member = data.member;
+  localStorage.setItem("gs_token", state.token);
+  localStorage.setItem("gs_member", JSON.stringify(state.member));
+  showChat();
+  await bootChat();
+}
+
 async function loadMembers() {
   const data = await api("/api/members?role=child");
   state.members = data.members;
@@ -711,56 +719,22 @@ async function loadMembers() {
     btn.className = "member-card";
     btn.style.setProperty("--member-color", m.color);
     btn.innerHTML = `<div class="member-emoji">${m.emoji}</div><div class="member-name">${m.name}</div>
-      <div class="member-status ${m.has_password ? "set" : "new"}">${m.has_password ? "已设密码" : "首次设置"}</div>`;
-    btn.addEventListener("click", () => selectMember(m));
+      <div class="member-status go">点我进入</div>`;
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      try {
+        await enterAs(m);
+      } catch (err) {
+        if (loginError) {
+          loginError.textContent = err.message;
+          loginError.classList.remove("hidden");
+        }
+        btn.disabled = false;
+      }
+    });
     memberGrid.appendChild(btn);
   }
 }
-
-function selectMember(m) {
-  state.selected = m;
-  [...memberGrid.children].forEach((el) => el.classList.remove("active"));
-  const idx = state.members.findIndex((x) => x.id === m.id);
-  if (memberGrid.children[idx]) memberGrid.children[idx].classList.add("active");
-  loginForm.classList.remove("hidden");
-  selectedChip.style.setProperty("--member-color", m.color);
-  selectedChip.textContent = `${m.emoji} ${m.name}`;
-  passwordLabel.textContent = m.has_password ? "输入密码" : "设置密码";
-  loginHint.textContent = m.has_password ? "输入密码进入" : "第一次来先设密码";
-  loginError.classList.add("hidden");
-  passwordInput.value = "";
-  passwordInput.focus();
-}
-
-$("#back-btn").addEventListener("click", () => {
-  state.selected = null;
-  loginForm.classList.add("hidden");
-  [...memberGrid.children].forEach((el) => el.classList.remove("active"));
-});
-
-loginForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  if (!state.selected) return;
-  const btn = $("#login-btn");
-  btn.disabled = true;
-  try {
-    const data = await api("/api/login", {
-      method: "POST",
-      body: JSON.stringify({ user_id: state.selected.id, password: passwordInput.value }),
-    });
-    state.token = data.token;
-    state.member = data.member;
-    localStorage.setItem("gs_token", state.token);
-    localStorage.setItem("gs_member", JSON.stringify(state.member));
-    showChat();
-    await bootChat();
-  } catch (err) {
-    loginError.textContent = err.message;
-    loginError.classList.remove("hidden");
-  } finally {
-    btn.disabled = false;
-  }
-});
 
 $("#logout-btn").addEventListener("click", () => {
   state.token = ""; state.member = null; state.currentId = null;
@@ -1138,6 +1112,18 @@ async function init() {
       localStorage.removeItem("gs_member");
       state.token = "";
       state.member = null;
+    }
+  }
+  // 前台只有小葡萄：直接进入，免点选
+  if (state.members.length === 1) {
+    try {
+      await enterAs(state.members[0]);
+      return;
+    } catch (err) {
+      if (loginError) {
+        loginError.textContent = err.message;
+        loginError.classList.remove("hidden");
+      }
     }
   }
   showLogin();

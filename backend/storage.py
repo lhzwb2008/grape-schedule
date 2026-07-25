@@ -1,4 +1,4 @@
-"""本地文件存储：账户、会话；日程走统一 store。"""
+"""本地文件存储：会话；日程走统一 store。无密码。"""
 
 from __future__ import annotations
 
@@ -9,13 +9,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import bcrypt
-
 from backend import store as app_store
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
-USERS_DIR = DATA_DIR / "users"
 SESSIONS_DIR = DATA_DIR / "sessions"
 
 MEMBERS = [
@@ -33,7 +30,6 @@ def _now() -> str:
 
 
 def ensure_dirs() -> None:
-    USERS_DIR.mkdir(parents=True, exist_ok=True)
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     for m in MEMBERS:
@@ -47,13 +43,8 @@ def list_members(*, role: str | None = None) -> list[dict[str, Any]]:
     for m in MEMBERS:
         if role and m["role"] != role:
             continue
-        has_password = _user_path(m["id"]).exists()
-        result.append({**m, "has_password": has_password})
+        result.append({**m})
     return result
-
-
-def _user_path(user_id: str) -> Path:
-    return USERS_DIR / f"{user_id}.json"
 
 
 def _session_dir(user_id: str) -> Path:
@@ -73,47 +64,13 @@ def get_member(user_id: str) -> dict[str, Any] | None:
     return None
 
 
-def user_has_password(user_id: str) -> bool:
-    return _user_path(user_id).exists()
-
-
-def set_password(user_id: str, password: str) -> None:
-    if not get_member(user_id):
-        raise ValueError("未知账户")
-    if len(password) < 4:
-        raise ValueError("密码至少 4 位")
-    ensure_dirs()
-    hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-    with _lock:
-        if _user_path(user_id).exists():
-            raise ValueError("该账户已设置密码，请直接登录")
-        data = {
-            "id": user_id,
-            "password_hash": hashed,
-            "created_at": _now(),
-            "updated_at": _now(),
-        }
-        _user_path(user_id).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def verify_password(user_id: str, password: str) -> bool:
-    path = _user_path(user_id)
-    if not path.exists():
-        return False
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return bcrypt.checkpw(password.encode("utf-8"), data["password_hash"].encode("utf-8"))
-
-
-def login(user_id: str, password: str) -> dict[str, Any]:
+def login(user_id: str) -> dict[str, Any]:
+    """无密码：选身份即进入。"""
     member = get_member(user_id)
     if not member:
         raise ValueError("未知账户")
-    if not user_has_password(user_id):
-        set_password(user_id, password)
-        return {**member, "first_login": True}
-    if not verify_password(user_id, password):
-        raise ValueError("密码错误")
-    return {**member, "first_login": False}
+    ensure_dirs()
+    return {**member}
 
 
 def load_schedule() -> dict[str, Any]:

@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@500;700;800&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/styles.css?v=4" />
+  <link rel="stylesheet" href="/static/styles.css?v=5" />
   <script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"></script>
 </head>
@@ -21,19 +21,9 @@
       <p class="brand-sub">日程可视 · @提醒 · 接送路程</p>
     </header>
     <div class="login-panel">
-      <p class="panel-label">选择家长身份</p>
+      <p class="panel-label">我是谁？（点一下进入）</p>
       <div id="member-grid" class="member-grid"></div>
-      <form id="login-form" class="login-form hidden">
-        <div class="selected-chip" id="selected-chip"></div>
-        <label class="field">
-          <span id="password-label">设置密码</span>
-          <input id="password-input" type="password" autocomplete="current-password" placeholder="至少 4 位" minlength="4" required />
-        </label>
-        <p id="login-hint" class="hint">首次进入请设置密码</p>
-        <p id="login-error" class="error hidden"></p>
-        <button type="submit" class="btn-primary tap" id="login-btn">进入管家</button>
-        <button type="button" class="btn-ghost tap" id="back-btn">重选</button>
-      </form>
+      <p id="login-error" class="error hidden"></p>
       <p class="switch-link"><a href="/">← 小葡萄前台</a></p>
     </div>
   </section>
@@ -45,7 +35,7 @@
         <div class="side-user" id="side-user"></div>
       </div>
       <div class="parent-top-actions">
-        <button type="button" class="btn-ghost tap" id="logout-btn">退出</button>
+        <button type="button" class="btn-ghost tap" id="logout-btn">切换身份</button>
       </div>
     </header>
 
@@ -93,6 +83,6 @@
     </div>
   </section>
 
-  <script src="/static/parent.js?v=4"></script>
+  <script src="/static/parent.js?v=5"></script>
 </body>
 </html>

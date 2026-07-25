@@ -11,12 +11,7 @@ const $ = (sel) => document.querySelector(sel);
 const loginView = $("#login-view");
 const appView = $("#app-view");
 const memberGrid = $("#member-grid");
-const loginForm = $("#login-form");
-const passwordInput = $("#password-input");
-const passwordLabel = $("#password-label");
-const loginHint = $("#login-hint");
 const loginError = $("#login-error");
-const selectedChip = $("#selected-chip");
 const messagesEl = $("#messages");
 const inputEl = $("#input");
 const sendBtn = $("#send-btn");
@@ -61,6 +56,20 @@ function showApp() {
   $("#side-user").textContent = `${state.member.emoji} ${state.member.name}`;
 }
 
+async function enterAs(member) {
+  const data = await api("/api/login", {
+    method: "POST",
+    body: JSON.stringify({ user_id: member.id }),
+  });
+  if (data.member.role !== "parent") throw new Error("请使用家长身份进入家长端");
+  state.token = data.token;
+  state.member = data.member;
+  localStorage.setItem("gs_parent_token", state.token);
+  localStorage.setItem("gs_parent_member", JSON.stringify(state.member));
+  showApp();
+  await boot();
+}
+
 async function loadMembers() {
   const data = await api("/api/members?role=parent");
   state.members = data.members;
@@ -71,56 +80,22 @@ async function loadMembers() {
     btn.className = "member-card";
     btn.style.setProperty("--member-color", m.color);
     btn.innerHTML = `<div class="member-emoji">${m.emoji}</div><div class="member-name">${m.name}</div>
-      <div class="member-status ${m.has_password ? "set" : "new"}">${m.has_password ? "已设密码" : "首次设置"}</div>`;
-    btn.addEventListener("click", () => selectMember(m));
+      <div class="member-status go">点我进入</div>`;
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      try {
+        await enterAs(m);
+      } catch (err) {
+        if (loginError) {
+          loginError.textContent = err.message;
+          loginError.classList.remove("hidden");
+        }
+        btn.disabled = false;
+      }
+    });
     memberGrid.appendChild(btn);
   }
 }
-
-function selectMember(m) {
-  state.selected = m;
-  [...memberGrid.children].forEach((el) => el.classList.remove("active"));
-  const idx = state.members.findIndex((x) => x.id === m.id);
-  if (memberGrid.children[idx]) memberGrid.children[idx].classList.add("active");
-  loginForm.classList.remove("hidden");
-  selectedChip.style.setProperty("--member-color", m.color);
-  selectedChip.textContent = `${m.emoji} ${m.name}`;
-  passwordLabel.textContent = m.has_password ? "输入密码" : "设置密码";
-  loginHint.textContent = m.has_password ? "输入密码进入家长端" : "首次进入请设置密码";
-  loginError.classList.add("hidden");
-  passwordInput.value = "";
-  passwordInput.focus();
-}
-
-$("#back-btn").addEventListener("click", () => {
-  state.selected = null;
-  loginForm.classList.add("hidden");
-});
-
-loginForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  if (!state.selected) return;
-  const btn = $("#login-btn");
-  btn.disabled = true;
-  try {
-    const data = await api("/api/login", {
-      method: "POST",
-      body: JSON.stringify({ user_id: state.selected.id, password: passwordInput.value }),
-    });
-    if (data.member.role !== "parent") throw new Error("请使用家长账户登录家长端");
-    state.token = data.token;
-    state.member = data.member;
-    localStorage.setItem("gs_parent_token", state.token);
-    localStorage.setItem("gs_parent_member", JSON.stringify(state.member));
-    showApp();
-    await boot();
-  } catch (err) {
-    loginError.textContent = err.message;
-    loginError.classList.remove("hidden");
-  } finally {
-    btn.disabled = false;
-  }
-});
 
 $("#logout-btn").addEventListener("click", () => {
   state.token = "";
