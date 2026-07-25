@@ -819,6 +819,7 @@ async function openSession(id) {
   state.currentId = id;
   chatTitle.textContent = data.session.title || "新对话";
   deleteBtn.classList.remove("hidden");
+  clearAttachments();
   renderSessions();
   renderMessages(data.session.messages || []);
 }
