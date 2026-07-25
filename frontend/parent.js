@@ -163,31 +163,40 @@ async function refreshBoard() {
   const data = await api("/api/schedule");
   $("#board-meta").textContent = `${data.weekday || ""} · ${new Date(data.now).toLocaleString("zh-CN")}`;
   const board = $("#reminder-board");
-  const items = data.reminders_parent || [];
+  const items = data.reminders || [];
   board.innerHTML = items.length
     ? items
         .map(
           (r) => `<div class="reminder-card ${r.passed ? "passed" : ""}">
         <div class="title">${escapeHtml(r.title)} · ${escapeHtml(r.start || "")}</div>
         <div class="meta">${escapeHtml(r.place_name || "")} ${escapeHtml(r.place_address || "")}</div>
-        <div class="meta">家长提前 ${r.advance_minutes} 分钟提醒 · ${escapeHtml(r.notes || "")}</div>
+        <div class="meta">${escapeHtml(r.at_text || "@" + (r.member_name || ""))} · 提前 ${r.advance_minutes} 分钟</div>
+        <div class="meta">${escapeHtml(r.notes || "")}</div>
       </div>`
         )
         .join("")
-    : `<div class="muted">今日暂无已录入提醒（请在下方对话告知真实行程，系统会写入统一存储）</div>`;
+    : `<div class="muted">今日暂无已录入提醒（对话里请说明 @谁；系统会写入统一存储）</div>`;
 
   const week = $("#week-list");
   const weekly = data.schedule?.weekly || [];
   week.innerHTML = weekly.length
     ? weekly
-        .map(
-          (ev) => `<div class="week-item">
+        .map((ev) => {
+          const at =
+            (ev.reminders || [])
+              .map((r) => {
+                const name =
+                  (data.members || []).find((m) => m.id === r.member_id)?.name || r.member_id;
+                return `@${name}（提前${r.minutes_before}分）`;
+              })
+              .join(" ") || "（未 @ 任何人）";
+          return `<div class="week-item">
       <strong>${escapeHtml(ev.title)}</strong>
       <div class="meta">${(ev.days || []).join("、")} ${ev.start}-${ev.end} @ ${escapeHtml(ev.place_id || "")}</div>
-      <div class="meta">孩子提前${ev.remind_child_minutes}分 / 家长提前${ev.remind_parent_minutes}分</div>
+      <div class="meta">提醒：${escapeHtml(at)}</div>
       <div class="meta">${escapeHtml(ev.notes || "")}</div>
-    </div>`
-        )
+    </div>`;
+        })
         .join("")
     : `<div class="muted">周程为空——尚未录入任何真实日程</div>`;
 
@@ -203,44 +212,6 @@ $("#save-schedule-btn").addEventListener("click", async () => {
     await refreshBoard();
   } catch (err) {
     msg.textContent = err.message || "保存失败";
-  }
-});
-
-async function refreshIterate() {
-  const st = await api("/api/self-iterate/status");
-  const el = $("#iterate-status");
-  el.className = "iterate-status " + (st.activated ? "on" : "off");
-  el.textContent = st.activated
-    ? `已激活（${st.activated_at || ""}）· 历史 ${st.history_count} 条`
-    : st.configured
-      ? "未激活（需口令）"
-      : "服务端未配置激活口令";
-}
-
-$("#activate-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const msg = $("#iterate-msg");
-  try {
-    await api("/api/self-iterate/activate", {
-      method: "POST",
-      body: JSON.stringify({ code: $("#activate-code").value }),
-    });
-    msg.textContent = "激活成功";
-    $("#activate-code").value = "";
-    await refreshIterate();
-  } catch (err) {
-    msg.textContent = err.message;
-  }
-});
-
-$("#deactivate-btn").addEventListener("click", async () => {
-  const msg = $("#iterate-msg");
-  try {
-    await api("/api/self-iterate/deactivate", { method: "POST", body: "{}" });
-    msg.textContent = "已关闭自迭代";
-    await refreshIterate();
-  } catch (err) {
-    msg.textContent = err.message;
   }
 });
 
@@ -315,7 +286,6 @@ $("#composer").addEventListener("submit", async (e) => {
 
 async function boot() {
   await refreshBoard();
-  await refreshIterate();
   await ensureSession();
 }
 

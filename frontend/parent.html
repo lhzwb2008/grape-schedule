@@ -71,25 +71,13 @@
         <h3>家长对话</h3>
         <div class="messages compact" id="messages"></div>
         <form class="composer" id="composer">
-          <textarea id="input" rows="2" placeholder="问行程、接送、提醒策略…"></textarea>
+          <textarea id="input" rows="2" placeholder="问行程、接送、提醒谁（如 @小葡萄 @妈妈）…"></textarea>
           <button type="submit" class="btn-send tap" id="send-btn">发送</button>
         </form>
-      </section>
-
-      <section class="panel deep-panel">
-        <h3>深度功能：自迭代</h3>
-        <p class="muted">激活后，可用 Cursor Grok 按需求改代码（仍需人工确认部署）。默认关闭。</p>
-        <div id="iterate-status" class="iterate-status"></div>
-        <form id="activate-form" class="activate-form">
-          <input id="activate-code" type="password" placeholder="深度激活口令" autocomplete="off" />
-          <button type="submit" class="btn-primary tap">激活</button>
-          <button type="button" class="btn-ghost tap" id="deactivate-btn">关闭</button>
-        </form>
-        <p id="iterate-msg" class="hint"></p>
       </section>
     </div>
   </section>
 
-  <script src="/static/parent.js?v=2"></script>
+  <script src="/static/parent.js?v=3"></script>
 </body>
 </html>

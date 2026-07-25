@@ -1,4 +1,4 @@
-"""按任务难度路由模型：默认 DeepSeek（带日程工具），困难/自迭代走 Cursor Grok。"""
+"""按任务难度路由模型：默认 DeepSeek（带日程工具），困难任务可选 Cursor。"""
 
 from __future__ import annotations
 
@@ -9,11 +9,10 @@ from backend import cursor_client, deepseek_client, schedule_tools
 from backend.schedule_context import build_schedule_context
 
 Provider = Literal["deepseek", "cursor"]
-Difficulty = Literal["easy", "hard", "self_iterate"]
+Difficulty = Literal["easy", "hard"]
 
 HARD_HINTS = re.compile(
-    r"(改代码|修改代码|自迭代|自动迭代|发布上线|部署|重构|写脚本|实现功能|"
-    r"复杂规划|深度分析|架构|pull request|PR\b|git\b|修复 bug|修 bug)",
+    r"(复杂规划|深度分析|架构设计|大规模重构)",
     re.IGNORECASE,
 )
 
@@ -26,13 +25,13 @@ def classify_difficulty(message: str, *, force: Difficulty | None = None) -> Dif
         return "easy"
     if HARD_HINTS.search(text):
         return "hard"
-    if len(text) > 800:
+    if len(text) > 1200:
         return "hard"
     return "easy"
 
 
 def provider_for(difficulty: Difficulty) -> Provider:
-    if difficulty in ("hard", "self_iterate"):
+    if difficulty == "hard":
         return "cursor"
     return "deepseek"
 
@@ -43,20 +42,20 @@ def build_system_prompt(member: dict[str, Any], schedule_ctx: str) -> str:
     if role == "child":
         persona = (
             "你是「小葡萄的日程小助手」，专门陪伴小朋友小葡萄。\n"
-            "用简短、温暖、好懂的中文说话，可以适当鼓励。\n"
-            "只能根据已持久化的真实日程回答；库里没有的信息不要编造，可以说「还没记进日历，让爸爸妈妈告诉我」。\n"
-            "需要时先调用 get_schedule 再回答。"
+            "用简短、温暖、好懂的中文说话。\n"
+            "只能根据已持久化的真实日程回答；没有的信息不要编造。\n"
+            "提到提醒时，用 @小葡萄 这样的方式说明是提醒谁。"
         )
     else:
         persona = (
             "你是「小葡萄家庭日程管家」，面向家长（爸爸/妈妈/奶奶）。\n"
             "【硬性规则】\n"
-            "1. 禁止编造、禁止使用「示例/假设」地址或行程；只使用工具读写后的真实数据。\n"
-            "2. 家长告知任何新的/变更的地点、路程、周程、单次安排时，必须立刻调用对应工具写入统一存储，"
-            "不能只口头确认。\n"
-            "3. 信息不全时：先把已确认部分落库，再明确追问缺的地址/时间/路程分钟数。\n"
-            "4. 回答前若不确定库内状态，先 get_schedule。\n"
-            "5. 写库成功后，用简洁中文复述已保存内容（时间、地点、提醒）。"
+            "1. 禁止编造与「示例」地址/行程；只使用工具读写后的真实数据。\n"
+            "2. 家长告知行程时必须调用工具落库。\n"
+            "3. 每条行程的 reminders 必须 @ 到具体成员（小葡萄/爸爸/妈妈/奶奶），"
+            "不能只写笼统的「家长」「孩子」。钢琴课等通常要同时 @小葡萄 与接送家长。\n"
+            "4. 回复里复述提醒时也要用 @姓名 格式。\n"
+            "5. 信息不全时先落库已确认部分，再追问缺的地址/时间/@对象。"
         )
     return (
         f"{persona}\n"
@@ -107,7 +106,6 @@ def run_chat(
         tools = schedule_tools.tools_for_role(role)
 
         def _exec(name: str, args: dict[str, Any]) -> dict[str, Any]:
-            # 孩子只读
             if role != "parent" and name != "get_schedule":
                 return {"ok": False, "error": "小朋友不能修改日程，请让家长在家长端更新"}
             return schedule_tools.execute_tool(name, args, by=user_id)
@@ -126,7 +124,6 @@ def run_chat(
             "model": model,
             "difficulty": difficulty,
             "agent_id": None,
-            "schedule_updated": True,
         }
 
     model = cursor_client.model_id()
@@ -136,16 +133,10 @@ def run_chat(
         f"{system}\n\n"
         f"【历史摘要】共 {len(history)} 条消息\n"
         f"【用户问题】\n{user_message.strip()}\n\n"
-        "请直接给出对用户的中文回复。日程写入请提示用户在家长端用对话落库（本路径不直接写库）。"
+        "请直接给出对用户的中文回复。提醒请用 @姓名。"
     )
-    if difficulty == "self_iterate":
-        prompt = (
-            f"{system}\n\n"
-            "【自迭代模式已激活】用户希望你修改 grape-schedule 仓库代码并说明如何验证与部署。\n"
-            f"【用户需求】\n{user_message.strip()}\n"
-        )
     if on_status:
-        on_status(f"使用 Cursor {model} 处理较难任务…")
+        on_status(f"使用 Cursor {model}…")
 
     agent_id = session_agent_id
     if agent_id:
@@ -155,7 +146,7 @@ def run_chat(
 
     text, status = cursor_client.run_with_stream(agent_id, run_id, on_assistant=on_delta)
     if not (text or "").strip():
-        text = f"（Cursor Agent 未返回有效内容，状态：{status}）"
+        text = f"（未返回有效内容，状态：{status}）"
     return {
         "text": text.strip(),
         "provider": "cursor",

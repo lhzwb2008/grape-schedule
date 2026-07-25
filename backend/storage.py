@@ -1,4 +1,4 @@
-"""本地文件存储：账户、会话；日程/自迭代走统一 store。"""
+"""本地文件存储：账户、会话；日程走统一 store。"""
 
 from __future__ import annotations
 
@@ -124,16 +124,6 @@ def load_schedule() -> dict[str, Any]:
 def save_schedule(data: dict[str, Any], *, by: str = "api") -> dict[str, Any]:
     ensure_dirs()
     return app_store.save_schedule(data, by=by)
-
-
-def load_self_iterate() -> dict[str, Any]:
-    ensure_dirs()
-    return app_store.get_self_iterate()
-
-
-def save_self_iterate(data: dict[str, Any], *, by: str = "api") -> dict[str, Any]:
-    ensure_dirs()
-    return app_store.save_self_iterate(data, by=by)
 
 
 def list_sessions(user_id: str) -> list[dict[str, Any]]:

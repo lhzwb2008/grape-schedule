@@ -19,10 +19,10 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from backend import self_iterate, storage
+from backend import storage
 from backend.dashscope_voice import recognize as asr_recognize
 from backend.dashscope_voice import synthesize as tts_synthesize
-from backend.model_router import classify_difficulty, run_chat
+from backend.model_router import run_chat
 from backend.schedule_context import format_schedule_for_api
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -101,7 +101,7 @@ class AttachmentIn(BaseModel):
 
 class ChatBody(BaseModel):
     message: str = Field(default="", max_length=8000)
-    force_model: str | None = Field(default=None, description="easy|hard|self_iterate")
+    force_model: str | None = Field(default=None, description="easy|hard")
     attachments: list[AttachmentIn] = Field(default_factory=list)
 
 
@@ -147,10 +147,6 @@ class TtsBody(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
 
 
-class ActivateBody(BaseModel):
-    code: str = Field(min_length=1, max_length=128)
-
-
 class ScheduleUpdateBody(BaseModel):
     schedule: dict[str, Any]
 
@@ -173,7 +169,6 @@ def health():
         "hard_model": os.environ.get("CURSOR_MODEL_ID", "grok-4.5"),
         "https_host": https_host,
         "https_url": f"https://{https_host}/",
-        "self_iterate": self_iterate.status(),
     }
 
 
@@ -290,30 +285,6 @@ def tts(body: TtsBody, authorization: str | None = Header(default=None)):
     )
 
 
-@app.get("/api/self-iterate/status")
-def self_iterate_status(authorization: str | None = Header(default=None)):
-    user_id = _auth_user(authorization)
-    _require_parent(user_id)
-    return self_iterate.status()
-
-
-@app.post("/api/self-iterate/activate")
-def self_iterate_activate(body: ActivateBody, authorization: str | None = Header(default=None)):
-    user_id = _auth_user(authorization)
-    _require_parent(user_id)
-    try:
-        return self_iterate.activate(body.code, by_user=user_id)
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
-
-
-@app.post("/api/self-iterate/deactivate")
-def self_iterate_deactivate(authorization: str | None = Header(default=None)):
-    user_id = _auth_user(authorization)
-    _require_parent(user_id)
-    return self_iterate.deactivate(by_user=user_id)
-
-
 @app.post("/api/sessions/{session_id}/chat")
 async def chat(
     session_id: str,
@@ -338,20 +309,7 @@ async def chat(
     if not message and not attach_names:
         raise HTTPException(400, "请输入消息或上传截图")
 
-    force = body.force_model if body.force_model in ("easy", "hard", "self_iterate") else None
-    if force == "self_iterate" or classify_difficulty(message) == "self_iterate":
-        try:
-            self_iterate.require_activated()
-        except PermissionError as e:
-            raise HTTPException(403, str(e)) from e
-        force = "self_iterate"
-
-    if "自迭代" in message or "自动改代码" in message:
-        try:
-            self_iterate.require_activated()
-            force = force or "self_iterate"
-        except PermissionError as e:
-            raise HTTPException(403, str(e)) from e
+    force = body.force_model if body.force_model in ("easy", "hard") else None
 
     stored_user = message or "（发送了截图）"
     if attach_names:
@@ -398,7 +356,7 @@ async def chat(
                 history,
                 chat_text,
                 force_difficulty=force,  # type: ignore[arg-type]
-                session_agent_id=agent_id if force in ("hard", "self_iterate") else None,
+                session_agent_id=agent_id if force == "hard" else None,
                 on_delta=on_delta,
                 on_status=on_status,
             )
@@ -411,16 +369,6 @@ async def chat(
                 agent_id=result.get("agent_id"),
                 model=result.get("model"),
             )
-            if force == "self_iterate":
-                self_iterate.record_request(
-                    user_id,
-                    chat_text,
-                    {
-                        "provider": result.get("provider"),
-                        "model": result.get("model"),
-                        "agent_id": result.get("agent_id"),
-                    },
-                )
             _emit(
                 {
                     "type": "done",

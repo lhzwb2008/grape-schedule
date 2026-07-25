@@ -1,4 +1,4 @@
-"""日程读写工具：供大模型 function calling 真正落库。"""
+"""日程读写工具：供大模型 function calling 真正落库。提醒必须 @ 到具体成员。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import re
 import uuid
 from typing import Any
 
-from backend import store
+from backend import store, storage
 
 DAY_ALIASES = {
     "星期一": "周一",
@@ -24,6 +24,19 @@ DAY_ALIASES = {
     "周五": "周五",
     "周六": "周六",
     "周日": "周日",
+}
+
+MEMBER_ALIAS = {
+    "小葡萄": "xiaoputao",
+    "葡萄": "xiaoputao",
+    "孩子": "xiaoputao",
+    "xiaoputao": "xiaoputao",
+    "爸爸": "dad",
+    "dad": "dad",
+    "妈妈": "mom",
+    "mom": "mom",
+    "奶奶": "grandma",
+    "grandma": "grandma",
 }
 
 
@@ -54,12 +67,68 @@ def _norm_hm(value: str | None) -> str:
     return f"{h:02d}:{mi:02d}"
 
 
+def _valid_member_ids() -> set[str]:
+    return {m["id"] for m in storage.MEMBERS}
+
+
+def resolve_member_id(raw: str) -> str | None:
+    key = str(raw or "").strip()
+    if not key:
+        return None
+    if key in _valid_member_ids():
+        return key
+    return MEMBER_ALIAS.get(key) or MEMBER_ALIAS.get(key.lower())
+
+
+def normalize_reminders(raw: Any) -> list[dict[str, Any]]:
+    """统一为 [{member_id, minutes_before}]，至少一人。"""
+    valid = _valid_member_ids()
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, str):
+                mid = resolve_member_id(item)
+                if mid and mid in valid and mid not in seen:
+                    seen.add(mid)
+                    out.append({"member_id": mid, "minutes_before": 30})
+                continue
+            if not isinstance(item, dict):
+                continue
+            mid = resolve_member_id(str(item.get("member_id") or item.get("id") or item.get("name") or ""))
+            if not mid or mid not in valid or mid in seen:
+                continue
+            try:
+                minutes = int(item.get("minutes_before") if item.get("minutes_before") is not None else item.get("minutes") or 30)
+            except (TypeError, ValueError):
+                minutes = 30
+            minutes = max(0, min(minutes, 24 * 60))
+            seen.add(mid)
+            out.append({"member_id": mid, "minutes_before": minutes})
+
+    if not out:
+        raise ValueError("提醒必须 @ 到具体的人（如小葡萄、爸爸、妈妈、奶奶），不能为空")
+    return out
+
+
+def format_at_mentions(reminders: list[dict[str, Any]]) -> str:
+    parts = []
+    for r in reminders or []:
+        mid = r.get("member_id")
+        m = storage.get_member(str(mid or ""))
+        name = (m or {}).get("name") or mid
+        mins = r.get("minutes_before", 30)
+        parts.append(f"@{name}（提前{mins}分）")
+    return " ".join(parts)
+
+
 TOOLS_PARENT: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
             "name": "get_schedule",
-            "description": "读取当前已持久化的真实日程（无演示数据）。回答行程前应先确认库里有什么。",
+            "description": "读取当前已持久化的真实日程。回答行程前应先确认库里有什么。",
             "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
         },
     },
@@ -71,8 +140,8 @@ TOOLS_PARENT: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "address": {"type": "string", "description": "真实住址"},
-                    "name": {"type": "string", "description": "地点名，默认家"},
+                    "address": {"type": "string"},
+                    "name": {"type": "string"},
                     "lat": {"type": ["number", "null"]},
                     "lng": {"type": ["number", "null"]},
                 },
@@ -84,7 +153,7 @@ TOOLS_PARENT: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "upsert_place",
-            "description": "新增或更新真实地点（学校、琴房等）。地址必须是家长提供的真实信息。",
+            "description": "新增或更新真实地点（学校、琴房等）。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -130,7 +199,11 @@ TOOLS_PARENT: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "upsert_weekly_event",
-            "description": "新增或更新每周重复日程。家长告知新行程时必须调用此工具落库，禁止只口头确认不写库。",
+            "description": (
+                "新增或更新每周重复日程。家长告知新行程时必须调用此工具落库。"
+                "reminders 必填：每项含 member_id（xiaoputao/dad/mom/grandma 或中文名）与 minutes_before。"
+                "例如钢琴课需同时 @小葡萄 与接送家长。"
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -140,12 +213,21 @@ TOOLS_PARENT: list[dict[str, Any]] = [
                     "start": {"type": "string", "description": "HH:MM"},
                     "end": {"type": "string", "description": "HH:MM"},
                     "place_id": {"type": "string"},
-                    "remind_child_minutes": {"type": "integer"},
-                    "remind_parent_minutes": {"type": "integer"},
-                    "notify_roles": {"type": "array", "items": {"type": "string"}},
+                    "reminders": {
+                        "type": "array",
+                        "description": "必须 @ 到人，如 [{member_id:'xiaoputao',minutes_before:20},{member_id:'mom',minutes_before:55}]",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "member_id": {"type": "string"},
+                                "minutes_before": {"type": "integer"},
+                            },
+                            "required": ["member_id", "minutes_before"],
+                        },
+                    },
                     "notes": {"type": "string"},
                 },
-                "required": ["title", "days", "start", "end"],
+                "required": ["title", "days", "start", "end", "reminders"],
             },
         },
     },
@@ -165,7 +247,7 @@ TOOLS_PARENT: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "upsert_one_off_event",
-            "description": "新增或更新单次日程（指定日期）",
+            "description": "新增或更新单次日程。reminders 必填且必须 @ 到具体成员。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -175,11 +257,20 @@ TOOLS_PARENT: list[dict[str, Any]] = [
                     "start": {"type": "string"},
                     "end": {"type": "string"},
                     "place_id": {"type": "string"},
-                    "remind_child_minutes": {"type": "integer"},
-                    "remind_parent_minutes": {"type": "integer"},
+                    "reminders": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "member_id": {"type": "string"},
+                                "minutes_before": {"type": "integer"},
+                            },
+                            "required": ["member_id", "minutes_before"],
+                        },
+                    },
                     "notes": {"type": "string"},
                 },
-                "required": ["title", "date", "start", "end"],
+                "required": ["title", "date", "start", "end", "reminders"],
             },
         },
     },
@@ -340,6 +431,10 @@ def execute_tool(name: str, args: dict[str, Any] | None, *, by: str) -> dict[str
             end = _norm_hm(args.get("end"))
             if not title or not days or not start or not end:
                 return _err("周程需要 title、days、start、end")
+            try:
+                reminders = normalize_reminders(args.get("reminders"))
+            except ValueError as e:
+                return _err(str(e))
             eid = str(args.get("id") or "").strip() or _slug(f"{title}-{days[0]}-{start}")
             place_id = str(args.get("place_id") or "").strip()
             event = {
@@ -349,9 +444,7 @@ def execute_tool(name: str, args: dict[str, Any] | None, *, by: str) -> dict[str
                 "start": start,
                 "end": end,
                 "place_id": place_id,
-                "remind_child_minutes": int(args.get("remind_child_minutes") or 15),
-                "remind_parent_minutes": int(args.get("remind_parent_minutes") or 30),
-                "notify_roles": args.get("notify_roles") or ["child", "parent"],
+                "reminders": reminders,
                 "notes": str(args.get("notes") or ""),
             }
 
@@ -360,11 +453,15 @@ def execute_tool(name: str, args: dict[str, Any] | None, *, by: str) -> dict[str
                 for i, ev in enumerate(weekly):
                     if ev.get("id") == eid:
                         weekly[i] = {**ev, **event}
+                        # 清理旧字段
+                        weekly[i].pop("notify_roles", None)
+                        weekly[i].pop("remind_child_minutes", None)
+                        weekly[i].pop("remind_parent_minutes", None)
                         return
                 weekly.append(event)
 
             store.update_store(_mut, by=by, action="upsert_weekly")
-            return _ok(event)
+            return _ok({**event, "at": format_at_mentions(reminders)})
 
         if name == "remove_weekly_event":
             eid = str(args.get("id") or "").strip()
@@ -386,6 +483,10 @@ def execute_tool(name: str, args: dict[str, Any] | None, *, by: str) -> dict[str
                 return _err("单次日程需要 title、date、start、end")
             if not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
                 return _err("date 需为 YYYY-MM-DD")
+            try:
+                reminders = normalize_reminders(args.get("reminders"))
+            except ValueError as e:
+                return _err(str(e))
             eid = str(args.get("id") or "").strip() or _slug(f"{title}-{date}-{start}")
             event = {
                 "id": eid,
@@ -394,9 +495,7 @@ def execute_tool(name: str, args: dict[str, Any] | None, *, by: str) -> dict[str
                 "start": start,
                 "end": end,
                 "place_id": str(args.get("place_id") or "").strip(),
-                "remind_child_minutes": int(args.get("remind_child_minutes") or 15),
-                "remind_parent_minutes": int(args.get("remind_parent_minutes") or 30),
-                "notify_roles": ["child", "parent"],
+                "reminders": reminders,
                 "notes": str(args.get("notes") or ""),
             }
 
@@ -405,11 +504,14 @@ def execute_tool(name: str, args: dict[str, Any] | None, *, by: str) -> dict[str
                 for i, ev in enumerate(items):
                     if ev.get("id") == eid:
                         items[i] = {**ev, **event}
+                        items[i].pop("notify_roles", None)
+                        items[i].pop("remind_child_minutes", None)
+                        items[i].pop("remind_parent_minutes", None)
                         return
                 items.append(event)
 
             store.update_store(_mut, by=by, action="upsert_one_off")
-            return _ok(event)
+            return _ok({**event, "at": format_at_mentions(reminders)})
 
         if name == "remove_one_off_event":
             eid = str(args.get("id") or "").strip()

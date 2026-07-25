@@ -20,12 +20,6 @@
       "default_advance_minutes": 30
     }
   },
-  "self_iterate": {
-    "activated": false,
-    "activated_at": null,
-    "activated_by": null,
-    "history": []
-  },
   "change_log": [
     {
       "id": "026de7d26d",

@@ -64,18 +64,23 @@ if [[ ! -f data/app_store.json ]]; then
       "default_advance_minutes": 30
     }
   },
-  "self_iterate": {
-    "activated": false,
-    "activated_at": null,
-    "activated_by": null,
-    "history": []
-  },
   "change_log": []
 }
 STORE
 fi
-# 清理遗留 mock 文件
+# 清理遗留 mock / 自迭代文件
 rm -f data/schedule.json data/self_iterate.json
+python3 - <<'PY'
+import json
+from pathlib import Path
+p = Path("data/app_store.json")
+if p.exists():
+    data = json.loads(p.read_text(encoding="utf-8"))
+    if "self_iterate" in data:
+        data.pop("self_iterate", None)
+        p.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print("已从 app_store.json 移除 self_iterate")
+PY
 
 cat > /etc/systemd/system/grape-schedule.service <<UNIT
 [Unit]

@@ -1,4 +1,4 @@
-"""日程上下文：把预制日程表转成每次 chat 可注入的文本。"""
+"""日程上下文：真实日程表 → chat 上下文；提醒按 @成员 展开。"""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from backend import storage
+from backend.schedule_tools import format_at_mentions, normalize_reminders
 
 WEEKDAY_CN = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
@@ -26,14 +27,33 @@ def place_map(schedule: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {p["id"]: p for p in (schedule.get("places") or []) if isinstance(p, dict) and p.get("id")}
 
 
-def travel_minutes(schedule: dict[str, Any], frm: str, to: str) -> int | None:
-    for t in schedule.get("travel_buffers") or []:
-        if t.get("from") == frm and t.get("to") == to:
-            try:
-                return int(t.get("minutes") or 0)
-            except (TypeError, ValueError):
-                return None
-    return None
+def event_reminders(ev: dict[str, Any]) -> list[dict[str, Any]]:
+    """兼容旧字段，统一成 reminders 列表。"""
+    if ev.get("reminders"):
+        try:
+            return normalize_reminders(ev.get("reminders"))
+        except ValueError:
+            pass
+    # 旧数据兜底：按角色拆成成员（仅展示，写入时仍要求正式 reminders）
+    legacy: list[dict[str, Any]] = []
+    roles = ev.get("notify_roles") or []
+    try:
+        child_m = int(ev.get("remind_child_minutes") if ev.get("remind_child_minutes") is not None else 15)
+    except (TypeError, ValueError):
+        child_m = 15
+    try:
+        parent_m = int(ev.get("remind_parent_minutes") if ev.get("remind_parent_minutes") is not None else 30)
+    except (TypeError, ValueError):
+        parent_m = 30
+    if not roles or "child" in roles:
+        legacy.append({"member_id": "xiaoputao", "minutes_before": child_m})
+    if not roles or "parent" in roles:
+        for mid in ("dad", "mom", "grandma"):
+            legacy.append({"member_id": mid, "minutes_before": parent_m})
+    try:
+        return normalize_reminders(legacy)
+    except ValueError:
+        return []
 
 
 def today_items(schedule: dict[str, Any], *, when: datetime | None = None) -> list[dict[str, Any]]:
@@ -45,63 +65,69 @@ def today_items(schedule: dict[str, Any], *, when: datetime | None = None) -> li
         if day not in (ev.get("days") or []):
             continue
         place = places.get(ev.get("place_id") or "", {})
+        reminders = event_reminders(ev)
         items.append(
             {
                 **ev,
                 "day": day,
-                "place_name": place.get("name") or ev.get("place_id") or "未知地点",
+                "place_name": place.get("name") or ev.get("place_id") or "地点未录入",
                 "place_address": place.get("address") or "",
+                "reminders": reminders,
+                "at_text": format_at_mentions(reminders),
             }
         )
     for ev in schedule.get("one_off") or []:
         if ev.get("date") == when.strftime("%Y-%m-%d"):
             place = places.get(ev.get("place_id") or "", {})
+            reminders = event_reminders(ev)
             items.append(
                 {
                     **ev,
                     "day": day,
-                    "place_name": place.get("name") or ev.get("place_id") or "未知地点",
+                    "place_name": place.get("name") or ev.get("place_id") or "地点未录入",
                     "place_address": place.get("address") or "",
+                    "reminders": reminders,
+                    "at_text": format_at_mentions(reminders),
                 }
             )
     items.sort(key=lambda x: x.get("start") or "99:99")
     return items
 
 
-def upcoming_reminders(schedule: dict[str, Any], *, role: str, when: datetime | None = None) -> list[dict[str, Any]]:
-    """粗略计算今日即将到来的提醒（不含持久化推送，供看板/上下文使用）。"""
+def upcoming_reminders(
+    schedule: dict[str, Any],
+    *,
+    member_id: str | None = None,
+    when: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """按被 @ 的人展开今日提醒。"""
     when = when or now_local()
     now_hm = when.strftime("%H:%M")
     out = []
     for ev in today_items(schedule, when=when):
-        roles = ev.get("notify_roles") or ["child", "parent"]
-        if role == "child" and "child" not in roles:
-            continue
-        if role == "parent" and "parent" not in roles:
-            continue
-        advance = (
-            ev.get("remind_child_minutes")
-            if role == "child"
-            else ev.get("remind_parent_minutes")
-        )
-        try:
-            advance = int(advance if advance is not None else 30)
-        except (TypeError, ValueError):
-            advance = 30
-        start = ev.get("start") or ""
-        out.append(
-            {
-                "id": ev.get("id"),
-                "title": ev.get("title"),
-                "start": start,
-                "end": ev.get("end"),
-                "place_name": ev.get("place_name"),
-                "place_address": ev.get("place_address"),
-                "advance_minutes": advance,
-                "notes": ev.get("notes") or "",
-                "passed": bool(start and start < now_hm),
-            }
-        )
+        for r in ev.get("reminders") or []:
+            mid = r.get("member_id")
+            if member_id and mid != member_id:
+                continue
+            m = storage.get_member(str(mid or ""))
+            start = ev.get("start") or ""
+            out.append(
+                {
+                    "id": ev.get("id"),
+                    "title": ev.get("title"),
+                    "start": start,
+                    "end": ev.get("end"),
+                    "place_name": ev.get("place_name"),
+                    "place_address": ev.get("place_address"),
+                    "member_id": mid,
+                    "member_name": (m or {}).get("name") or mid,
+                    "member_emoji": (m or {}).get("emoji") or "",
+                    "advance_minutes": r.get("minutes_before", 30),
+                    "at_text": f"@{(m or {}).get('name') or mid}",
+                    "notes": ev.get("notes") or "",
+                    "passed": bool(start and start < now_hm),
+                }
+            )
     return out
 
 
@@ -119,25 +145,20 @@ def build_schedule_context(member: dict[str, Any], schedule: dict[str, Any] | No
         f"【当前时间】{when.strftime('%Y-%m-%d %H:%M')}（{day}）",
         f"【对话对象】{name}（角色：{'小朋友' if role == 'child' else '家长监管'}）",
         f"【孩子】{schedule.get('child_name') or '小葡萄'}",
+        "【成员可 @】小葡萄(xiaoputao)、爸爸(dad)、妈妈(mom)、奶奶(grandma)",
         "",
         "【今日行程】",
     ]
     if not items:
-        lines.append("- （库中无今日行程——不是演示数据；有行程请家长在对话中告知以便写入）")
+        lines.append("- （库中无今日行程；有行程请家长告知并写入，提醒必须 @ 到人）")
     else:
         for ev in items:
             addr = ev.get("place_address") or ""
             place_bit = f"@ {ev.get('place_name')}" + (f"（{addr}）" if addr else "（地址未录入）")
-            lines.append(
-                f"- {ev.get('start')}-{ev.get('end')} {ev.get('title')} {place_bit}"
-            )
+            lines.append(f"- {ev.get('start')}-{ev.get('end')} {ev.get('title')} {place_bit}")
+            lines.append(f"  提醒对象：{ev.get('at_text') or '（未 @ 任何人）'}")
             if ev.get("notes"):
                 lines.append(f"  备注：{ev['notes']}")
-            if role == "parent":
-                lines.append(
-                    f"  提醒：孩子提前 {ev.get('remind_child_minutes')} 分钟；"
-                    f"家长提前 {ev.get('remind_parent_minutes')} 分钟"
-                )
 
     lines.append("")
     lines.append("【常用地点】")
@@ -163,13 +184,8 @@ def build_schedule_context(member: dict[str, Any], schedule: dict[str, Any] | No
     lines.append("")
     lines.append(f"【库存量】周程 {len(weekly)} 条，单次 {len(one_off)} 条，地点 {len(places)} 个")
     if not weekly and not one_off:
-        lines.append("【重要】当前没有任何已保存行程。禁止臆造钢琴课/上学等安排。")
-
-    rules = schedule.get("reminder_rules") or {}
-    tone = rules.get("child_tone") if role == "child" else rules.get("parent_tone")
-    if tone:
-        lines.append("")
-        lines.append(f"【语气要求】{tone}")
+        lines.append("【重要】当前没有任何已保存行程。禁止臆造安排。")
+    lines.append("【硬性】每条行程的提醒必须 @ 到具体成员，不能只写「家长/孩子」笼统角色。")
 
     return "\n".join(lines)
 
@@ -177,11 +193,15 @@ def build_schedule_context(member: dict[str, Any], schedule: dict[str, Any] | No
 def format_schedule_for_api(schedule: dict[str, Any] | None = None) -> dict[str, Any]:
     schedule = schedule or storage.load_schedule()
     when = now_local()
+    today = today_items(schedule, when=when)
     return {
         "schedule": schedule,
-        "today": today_items(schedule, when=when),
+        "today": today,
         "now": when.isoformat(),
         "weekday": WEEKDAY_CN[when.weekday()],
-        "reminders_child": upcoming_reminders(schedule, role="child", when=when),
-        "reminders_parent": upcoming_reminders(schedule, role="parent", when=when),
+        "reminders": upcoming_reminders(schedule, when=when),
+        "reminders_by_member": {
+            m["id"]: upcoming_reminders(schedule, member_id=m["id"], when=when) for m in storage.MEMBERS
+        },
+        "members": [{"id": m["id"], "name": m["name"], "emoji": m["emoji"], "role": m["role"]} for m in storage.MEMBERS],
     }
