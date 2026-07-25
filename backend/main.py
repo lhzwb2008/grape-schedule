@@ -228,6 +228,7 @@ def asr(body: AsrBody, authorization: str | None = Header(default=None)):
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"语音识别失败：{e}") from e
+    print(f"[asr] mime={mime} bytes={len(raw)} text={text!r}", flush=True)
     return {"text": text}
 
 

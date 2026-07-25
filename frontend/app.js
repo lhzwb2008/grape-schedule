@@ -338,88 +338,194 @@ function setRecordingUi(on, { canceling = false, recognizing = false } = {}) {
   }
 }
 
-function cleanupMic() {
+function cleanupMic({ keepBuffers = false } = {}) {
   try { audioProcessor?.disconnect(); } catch {}
   try { audioSource?.disconnect(); } catch {}
   if (audioCtx) audioCtx.close().catch(() => {});
-  audioProcessor = null; audioSource = null; audioCtx = null;
-  try { if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop(); } catch {}
+  audioProcessor = null;
+  audioSource = null;
+  audioCtx = null;
+  try {
+    if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+  } catch {}
   mediaStream?.getTracks().forEach((t) => t.stop());
-  mediaStream = null; mediaRecorder = null; recordMode = "none";
-  recordChunks = []; wavBuffers = [];
+  mediaStream = null;
+  mediaRecorder = null;
+  recordMode = "none";
+  if (!keepBuffers) {
+    recordChunks = [];
+    wavBuffers = [];
+  }
 }
 
 async function acquireMicStream() {
-  if (!isSecureForMic()) throw new Error("请用 HTTPS 打开后再录音");
+  if (!isSecureForMic()) throw new Error("请用 HTTPS 打开后再录音（本项目域名见上方提示）");
   if (!navigator.mediaDevices?.getUserMedia) throw new Error("当前浏览器不支持麦克风");
   return navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 },
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+      channelCount: 1,
+    },
   });
 }
 
+/** 始终走 WAV：DashScope ASR 对 webm/opus 易误识别成「嗯」 */
 async function beginCapture(session) {
   mediaStream = await acquireMicStream();
-  if (session !== recSession || !holding) {
+  if (session !== recSession) {
     mediaStream.getTracks().forEach((t) => t.stop());
     mediaStream = null;
     return false;
   }
-  recordChunks = []; wavBuffers = [];
-  const mime = pickRecorderMime();
-  if (window.MediaRecorder) {
-    try {
-      mediaRecorder = mime ? new MediaRecorder(mediaStream, { mimeType: mime }) : new MediaRecorder(mediaStream);
-      recordMode = "mediarecorder";
-      mediaRecorder.ondataavailable = (e) => { if (e.data?.size) recordChunks.push(e.data); };
-      mediaRecorder.start(200);
-      setRecordingUi(true);
-      return true;
-    } catch { mediaRecorder = null; }
-  }
+
+  recordChunks = [];
+  wavBuffers = [];
   const AC = window.AudioContext || window.webkitAudioContext;
-  if (!AC) { cleanupMic(); throw new Error("无法录音"); }
+  if (!AC) {
+    cleanupMic();
+    throw new Error("当前浏览器无法录音，请换 Chrome / Safari 或升级微信");
+  }
   audioCtx = new AC();
   if (audioCtx.state === "suspended") await audioCtx.resume();
+  if (session !== recSession) {
+    cleanupMic();
+    return false;
+  }
   audioSource = audioCtx.createMediaStreamSource(mediaStream);
   audioProcessor = audioCtx.createScriptProcessor(4096, 1, 1);
   wavSampleRate = audioCtx.sampleRate;
-  audioProcessor.onaudioprocess = (e) => wavBuffers.push(new Float32Array(e.inputBuffer.getChannelData(0)));
-  const mute = audioCtx.createGain(); mute.gain.value = 0;
-  audioSource.connect(audioProcessor); audioProcessor.connect(mute); mute.connect(audioCtx.destination);
+  audioProcessor.onaudioprocess = (e) => {
+    wavBuffers.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+  };
+  const mute = audioCtx.createGain();
+  mute.gain.value = 0;
+  audioSource.connect(audioProcessor);
+  audioProcessor.connect(mute);
+  mute.connect(audioCtx.destination);
   recordMode = "wav";
   setRecordingUi(true);
+
+  // 若用户在准备阶段已松手：录够最短时长后再结束，或取消
+  if (pendingEnd) {
+    const cancel = pendingEnd.cancel;
+    pendingEnd = null;
+    holding = false;
+    if (cancel) {
+      cleanupMic();
+      setRecordingUi(false);
+      return false;
+    }
+    await new Promise((r) => setTimeout(r, 700));
+    await finishCapture({ cancel: false });
+    return false;
+  }
   return true;
+}
+
+function downsampleWav(floatChunks, fromRate, toRate = 16000) {
+  let len = 0;
+  for (const c of floatChunks) len += c.length;
+  const merged = new Float32Array(len);
+  let offset = 0;
+  for (const c of floatChunks) {
+    merged.set(c, offset);
+    offset += c.length;
+  }
+  if (fromRate === toRate) return { samples: merged, sampleRate: toRate };
+  const ratio = fromRate / toRate;
+  const newLen = Math.max(1, Math.floor(merged.length / ratio));
+  const out = new Float32Array(newLen);
+  for (let i = 0; i < newLen; i++) out[i] = merged[Math.floor(i * ratio)] || 0;
+  return { samples: out, sampleRate: toRate };
+}
+
+function encodeWavSamples(samples, sampleRate) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const writeStr = (o, s) => {
+    for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i));
+  };
+  writeStr(0, "RIFF");
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeStr(8, "WAVE");
+  writeStr(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, "data");
+  view.setUint32(40, samples.length * 2, true);
+  let p = 44;
+  for (let i = 0; i < samples.length; i++, p += 2) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(p, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+function audioRms(samples) {
+  if (!samples.length) return 0;
+  let sum = 0;
+  const step = Math.max(1, Math.floor(samples.length / 4000));
+  let n = 0;
+  for (let i = 0; i < samples.length; i += step) {
+    const v = samples[i];
+    sum += v * v;
+    n++;
+  }
+  return Math.sqrt(sum / Math.max(1, n));
 }
 
 async function finishCapture({ cancel = false } = {}) {
   const shouldCancel = cancel || state.cancelRecord;
   const mode = recordMode;
-  const chunks = recordChunks;
-  const wav = wavBuffers;
+  const wav = wavBuffers.slice();
   const sr = wavSampleRate;
-  const mimeType = (mediaRecorder && mediaRecorder.mimeType) || pickRecorderMime() || "audio/webm";
-  if (mode === "mediarecorder" && mediaRecorder && mediaRecorder.state !== "inactive") {
-    await new Promise((resolve) => {
-      mediaRecorder.onstop = resolve;
-      try { mediaRecorder.stop(); } catch { resolve(); }
-      setTimeout(resolve, 800);
-    });
+
+  // 先断开采集，保留 buffer
+  try { audioProcessor?.disconnect(); } catch {}
+  try { audioSource?.disconnect(); } catch {}
+  mediaStream?.getTracks().forEach((t) => t.stop());
+  mediaStream = null;
+  if (audioCtx) {
+    try { await audioCtx.close(); } catch {}
   }
-  cleanupMic();
+  audioProcessor = null;
+  audioSource = null;
+  audioCtx = null;
+  recordMode = "none";
   setRecordingUi(false);
-  if (shouldCancel) return;
-  let blob = null;
-  let mime = mimeType;
-  if (mode === "mediarecorder") {
-    if (!chunks.length) return;
-    blob = new Blob(chunks, { type: mimeType });
-  } else if (mode === "wav") {
-    if (!wav.length) return;
-    blob = encodeWav(wav, sr);
-    mime = "audio/wav";
-  } else return;
-  if (blob.size < 800) return;
-  await transcribeAudio(blob, mime);
+
+  if (shouldCancel || mode !== "wav") {
+    wavBuffers = [];
+    return;
+  }
+  if (!wav.length) {
+    alert("没有录到声音，请按住多说一会儿再松开");
+    return;
+  }
+
+  const { samples, sampleRate } = downsampleWav(wav, sr, 16000);
+  wavBuffers = [];
+  const durationSec = samples.length / sampleRate;
+  const rms = audioRms(samples);
+  if (durationSec < 0.55) {
+    alert("说得太短了，请按住按钮把话说完再松开");
+    return;
+  }
+  if (rms < 0.008) {
+    alert("几乎没听到声音，请靠近麦克风再说一次");
+    return;
+  }
+
+  const blob = encodeWavSamples(samples, sampleRate);
+  console.debug("[asr] wav", { bytes: blob.size, durationSec: durationSec.toFixed(2), rms: rms.toFixed(4) });
+  await transcribeAudio(blob, "audio/wav");
 }
 
 function blobToBase64(blob) {
@@ -431,18 +537,32 @@ function blobToBase64(blob) {
   });
 }
 
+function isWeakAsrText(text) {
+  const t = String(text || "").replace(/[。．\.！!？?\s]/g, "").trim();
+  return !t || /^(嗯|恩|啊|哦|呃|唔|额|嗯嗯|啊啊)$/.test(t);
+}
+
 async function transcribeAudio(blob, mimeType) {
   state.asrBusy = true;
   updateSendState();
   setRecordingUi(false, { recognizing: true });
+  voiceOverlay?.classList.remove("hidden");
+  if (voiceHint) voiceHint.textContent = "正在识别…";
+  if (holdBtn) holdBtn.textContent = "识别中…";
   try {
     const dataUrl = await blobToBase64(blob);
     const data = await api("/api/asr", {
       method: "POST",
-      body: JSON.stringify({ audio: dataUrl, mime: (mimeType || "audio/webm").split(";")[0] }),
+      body: JSON.stringify({
+        audio: dataUrl,
+        mime: (mimeType || "audio/wav").split(";")[0],
+      }),
     });
     const text = (data.text || "").trim();
-    if (!text) { alert("没有听清，请再说一次"); return; }
+    if (!text || isWeakAsrText(text)) {
+      alert(text ? `只听清了「${text}」，请靠近麦克风、说完整再试` : "没有听清，请再说一次");
+      return;
+    }
     inputEl.value = text;
     updateSendState();
     await sendMessage();
@@ -451,42 +571,73 @@ async function transcribeAudio(blob, mimeType) {
   } finally {
     state.asrBusy = false;
     setRecordingUi(false);
+    voiceOverlay?.classList.add("hidden");
+    if (holdBtn) holdBtn.textContent = "按住 说话";
     updateSendState();
   }
 }
 
+let pendingEnd = null; // { cancel: boolean } 松手发生在麦克风尚未就绪时
+
 async function onHoldStart(e) {
   if (state.sending || state.asrBusy || holding) return;
   e.preventDefault();
-  try { holdBtn?.setPointerCapture?.(e.pointerId); } catch {}
+  try {
+    holdBtn?.setPointerCapture?.(e.pointerId);
+  } catch {}
+  // 按住说话时先停掉 TTS，避免把播报录进麦克风
+  stopCurrentAudio();
   holding = true;
+  pendingEnd = null;
   holdStartY = e.clientY ?? 0;
   state.cancelRecord = false;
   const session = ++recSession;
   if (holdBtn) holdBtn.textContent = "准备中…";
+  holdBtn?.classList.add("recording");
   try {
     const ok = await beginCapture(session);
-    if (!ok && session === recSession) { setRecordingUi(false); holding = false; }
+    if (!ok && session === recSession && !pendingEnd) {
+      setRecordingUi(false);
+      holding = false;
+    }
   } catch (err) {
     if (session === recSession) {
-      cleanupMic(); setRecordingUi(false); holding = false;
+      cleanupMic();
+      setRecordingUi(false);
+      holding = false;
+      pendingEnd = null;
       alert(err.message || "无法开始录音");
     }
   }
 }
+
 function onHoldMove(e) {
-  if (!holding || !state.recording) return;
+  if (!holding) return;
+  if (!state.recording && recordMode === "none") return;
   const canceling = holdStartY - (e.clientY ?? holdStartY) > 60;
   state.cancelRecord = canceling;
-  setRecordingUi(true, { canceling });
+  if (state.recording) setRecordingUi(true, { canceling });
 }
+
 async function onHoldEnd(e) {
   e?.preventDefault?.();
-  if (!holding) return;
+  if (!holding && !pendingEnd) return;
   const cancel = state.cancelRecord;
+
+  // 还在「准备中」：标记结束后由 beginCapture 收尾，不要直接作废会话导致空录音
+  if (holding && !state.recording && recordMode === "none") {
+    pendingEnd = { cancel };
+    holding = false;
+    return;
+  }
+
   holding = false;
+  if (!state.recording && recordMode === "none") {
+    cleanupMic();
+    setRecordingUi(false);
+    return;
+  }
   recSession += 1;
-  if (!state.recording && recordMode === "none") { cleanupMic(); setRecordingUi(false); return; }
   await finishCapture({ cancel });
 }
 
@@ -504,6 +655,7 @@ if (holdBtn) {
   holdBtn.addEventListener("pointermove", onHoldMove);
   holdBtn.addEventListener("pointerup", onHoldEnd);
   holdBtn.addEventListener("pointercancel", onHoldEnd);
+  holdBtn.addEventListener("lostpointercapture", onHoldEnd);
   holdBtn.addEventListener("contextmenu", (e) => e.preventDefault());
 }
 stopBtn?.addEventListener("click", () => chatAbort?.abort());
