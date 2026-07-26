@@ -877,6 +877,14 @@ $("#composer").addEventListener("submit", (e) => {
   sendMessage();
 });
 inputEl?.addEventListener("input", () => updateSendState());
+inputEl?.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  // 输入法选词确认的回车：不发送
+  if (e.isComposing || e.keyCode === 229) return;
+  if (e.shiftKey) return; // Shift+Enter 换行
+  e.preventDefault();
+  if (!sendBtn?.disabled) sendMessage();
+});
 
 async function boot() {
   await loadPublicHttps();

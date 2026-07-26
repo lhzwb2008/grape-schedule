@@ -153,7 +153,7 @@ TOOLS_PARENT: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "upsert_place",
-            "description": "新增或更新真实地点（学校、琴房等）。",
+            "description": "新增或更新真实地点（学校、琴房等）。若只有名称无地址，可先 lookup_place 再写入。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -161,6 +161,21 @@ TOOLS_PARENT: list[dict[str, Any]] = [
                     "name": {"type": "string"},
                     "address": {"type": "string"},
                     "notes": {"type": "string"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "lookup_place",
+            "description": "联网检索地点公开地址。地点只有名称、家长未给门牌时先调用，再 upsert_place。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "地点名称，如 太阳宫、雅马哈"},
+                    "city_hint": {"type": "string", "description": "城市提示，默认上海"},
                 },
                 "required": ["name"],
             },
@@ -350,11 +365,29 @@ def execute_tool(name: str, args: dict[str, Any] | None, *, by: str) -> dict[str
             store.update_store(_mut, by=by, action="set_home")
             return _ok(store.get_schedule()["home"])
 
+        if name == "lookup_place":
+            from backend.place_lookup import lookup_place_address
+
+            place_name = str(args.get("name") or "").strip()
+            city_hint = str(args.get("city_hint") or "上海").strip() or "上海"
+            found = lookup_place_address(place_name, city_hint=city_hint)
+            if not found.get("ok"):
+                return _err(str(found.get("error") or "未找到地址"))
+            return _ok(found)
+
         if name == "upsert_place":
             place_name = str(args.get("name") or "").strip()
             if not place_name:
                 return _err("地点名称不能为空")
             address = str(args.get("address") or "").strip()
+            looked_note = ""
+            if not address:
+                from backend.place_lookup import lookup_place_address
+
+                found = lookup_place_address(place_name)
+                if found.get("ok") and found.get("address"):
+                    address = str(found["address"])
+                    looked_note = "（地址来自联网检索，请确认）"
             if address and ("示例" in address or "example" in address.lower()):
                 return _err("地址无效：禁止示例地址")
             pid = str(args.get("id") or "").strip() or _slug(place_name)
@@ -370,25 +403,35 @@ def execute_tool(name: str, args: dict[str, Any] | None, *, by: str) -> dict[str
 
             def _mut(data: dict[str, Any]) -> None:
                 places = data["schedule"].setdefault("places", [])
+                base_notes = str(args.get("notes") or "").strip()
+                if looked_note and looked_note not in base_notes:
+                    base_notes = f"{base_notes} {looked_note}".strip() if base_notes else looked_note
                 for p in places:
                     if p.get("id") == pid:
                         p["name"] = place_name
                         if address:
                             p["address"] = address
-                        if args.get("notes") is not None:
-                            p["notes"] = str(args.get("notes") or "")
+                        if args.get("notes") is not None or looked_note:
+                            p["notes"] = base_notes
                         return
                 places.append(
                     {
                         "id": pid,
                         "name": place_name,
                         "address": address,
-                        "notes": str(args.get("notes") or ""),
+                        "notes": base_notes,
                     }
                 )
 
             store.update_store(_mut, by=by, action="upsert_place")
-            return _ok({"id": pid, "name": place_name, "address": address})
+            return _ok(
+                {
+                    "id": pid,
+                    "name": place_name,
+                    "address": address,
+                    "looked_up": bool(looked_note),
+                }
+            )
 
         if name == "remove_place":
             pid = str(args.get("id") or "").strip()

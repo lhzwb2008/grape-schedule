@@ -1102,11 +1102,11 @@ inputEl.addEventListener("input", () => {
 });
 inputEl.addEventListener("keydown", (e) => {
   if (e.key !== "Enter") return;
+  // 输入法选词确认的回车：不发送
   if (e.isComposing || e.keyCode === 229) return;
-  if (e.altKey || e.metaKey) {
-    e.preventDefault();
-    if (!sendBtn.disabled) sendMessage();
-  }
+  if (e.shiftKey) return; // Shift+Enter 换行
+  e.preventDefault();
+  if (!sendBtn.disabled) sendMessage();
 });
 inputEl.addEventListener("paste", async (e) => {
   if (state.sending) return;
