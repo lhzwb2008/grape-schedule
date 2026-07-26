@@ -120,17 +120,32 @@ def lookup_place_address(name: str, *, city_hint: str = "上海") -> dict[str, A
         if isinstance(r, dict) and city[:2] in f"{r.get('title','')}{r.get('text','')}"
     ) or content
     address = _extract_address_from_text(preferred, query)
-    if address and city[:2] not in address and city not in address:
-        # 地址里完全没城市时，再试全量摘要 + LLM
-        alt = _extract_address_from_text(content, query)
-        if alt and (city[:2] in alt or city in alt):
-            address = alt
+
+    def _wrong_city(addr: str) -> bool:
+        a = addr or ""
+        if not a:
+            return True
+        if city.startswith("上海") and ("北京" in a or "朝阳区" in a):
+            return True
+        if city.startswith("北京") and ("上海" in a):
+            return True
+        # 地址里完全不含城市关键字时，也视为不可靠
+        if city[:2] not in a and city not in a:
+            return True
+        return False
+
+    if _wrong_city(address):
+        picked = _llm_pick_address(query, city, preferred or content)
+        if picked and not _wrong_city(picked):
+            address = picked
+        elif picked and city[:2] in picked:
+            address = picked
         else:
-            picked = _llm_pick_address(query, city, preferred or content)
-            if picked:
-                address = picked
+            address = ""
     if not address:
         address = _llm_pick_address(query, city, preferred or content)
+        if address and _wrong_city(address) and city[:2] not in address:
+            address = ""
 
     if not address:
         # 兜底：用第一条标题+摘要前 80 字给家长确认（仍标检索来源）
