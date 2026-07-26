@@ -101,7 +101,8 @@ def lookup_place_address(name: str, *, city_hint: str = "上海") -> dict[str, A
         return {"ok": False, "error": "地点名称为空"}
 
     city = str(city_hint or "上海").strip() or "上海"
-    search_q = f"{query} {city} 地址 位置"
+    # 把城市放前面，降低「太阳宫」命中北京同名地的概率
+    search_q = f"{city}{query} 地址 位置 在哪"
     raw = exa_client.search(search_q, num_results=6, include_text=True)
     if not raw.get("success"):
         return {
@@ -112,9 +113,24 @@ def lookup_place_address(name: str, *, city_hint: str = "上海") -> dict[str, A
 
     content = str(raw.get("content") or "")
     results = raw.get("results") or []
-    address = _extract_address_from_text(content, query)
+    # 优先含城市提示的片段
+    preferred = "\n".join(
+        f"{r.get('title','')}\n{r.get('text','')}"
+        for r in results
+        if isinstance(r, dict) and city[:2] in f"{r.get('title','')}{r.get('text','')}"
+    ) or content
+    address = _extract_address_from_text(preferred, query)
+    if address and city[:2] not in address and city not in address:
+        # 地址里完全没城市时，再试全量摘要 + LLM
+        alt = _extract_address_from_text(content, query)
+        if alt and (city[:2] in alt or city in alt):
+            address = alt
+        else:
+            picked = _llm_pick_address(query, city, preferred or content)
+            if picked:
+                address = picked
     if not address:
-        address = _llm_pick_address(query, city, content)
+        address = _llm_pick_address(query, city, preferred or content)
 
     if not address:
         # 兜底：用第一条标题+摘要前 80 字给家长确认（仍标检索来源）
